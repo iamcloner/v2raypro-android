@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import '../models/log_entry.dart';
 import '../models/proxy_node.dart';
 import '../utils/config_parser.dart';
 import 'country_service.dart';
+import 'log_service.dart';
 import 'xray_process_service.dart';
 
 /// Result object for Real Delay testing.
@@ -224,6 +226,19 @@ ProxyNode? _parseSingleOutboundMap(Map<String, dynamic> map) {
   return null;
 }
 
+/// Logs the test result to the application log as a warning
+void _logRealDelayResult(ProxyNode? node, RealDelayResult res) {
+  final header = node != null && node.name.isNotEmpty
+      ? '[Real Delay Test] ${node.name}'
+      : '[Real Delay Test]';
+  final message = '$header:\n$res';
+  LogService.instance.add(
+    message,
+    level: LogLevel.warning,
+    source: 'test',
+  );
+}
+
 /// Public Async Function for testing real delay of a config.
 /// Parameters:
 /// - [mode]: 'normal' | 'turbo'
@@ -246,14 +261,26 @@ Future<RealDelayResult> testRealDelay({
 
   final node = parseConfigToProxyNode(config);
   if (node == null) {
-    return const RealDelayResult(
+    const res = RealDelayResult(
       ping: null,
       country: null,
       ipv4: null,
       ipv6: null,
     );
+    _logRealDelayResult(null, res);
+    return res;
   }
 
+  final res = await _executeRealDelay(node, effectiveTimeout, isTurbo);
+  _logRealDelayResult(node, res);
+  return res;
+}
+
+Future<RealDelayResult> _executeRealDelay(
+  ProxyNode node,
+  Duration effectiveTimeout,
+  bool isTurbo,
+) async {
   // If node is currently connected, test via active local proxy
   final isRunningLocally = XrayProcessService.instance.state == EngineState.running ||
       (Platform.isAndroid && await XrayProcessService.instance.isAndroidVpnRunning());
@@ -442,6 +469,7 @@ Future<Map<String, RealDelayResult>> testRealDelayBatch({
 
   for (final n in nodes) {
     final r = resMap[n.id];
+    RealDelayResult singleRes;
     if (r != null && r.isSuccess) {
       String? ipv4;
       String? ipv6;
@@ -451,22 +479,19 @@ Future<Map<String, RealDelayResult>> testRealDelayBatch({
         if (exitIp.contains(':')) ipv6 = exitIp;
       }
       final cCode = (r.countryCode ?? n.countryCode)?.toLowerCase();
-      results[n.id] = RealDelayResult(
+      singleRes = RealDelayResult(
         ping: r.latencyMs,
         country: cCode,
         ipv4: ipv4,
         ipv6: ipv6,
         countryName: r.country ?? (cCode != null ? CountryService.getCountryName(cCode.toUpperCase()) : n.country),
       );
+      _logRealDelayResult(n, singleRes);
     } else {
-      final singleRes = await testRealDelay(
-        mode: mode,
-        type: type,
-        config: rawMap[n.id] ?? n,
-        timeout: effectiveTimeout,
-      );
-      results[n.id] = singleRes;
+      singleRes = await _executeRealDelay(n, effectiveTimeout, isTurbo);
+      _logRealDelayResult(n, singleRes);
     }
+    results[n.id] = singleRes;
   }
   return results;
 }
