@@ -300,8 +300,8 @@ class _SubscriptionsViewState extends ConsumerState<SubscriptionsView> {
     ref.read(nodesProvider.notifier).updateLatency(
       node.id,
       res.latencyMs,
-      countryCode: res.countryCode,
-      country: res.country,
+      countryCode: res.countryCode ?? node.countryCode ?? CountryService.resolveSync(node),
+      country: res.country ?? (res.countryCode != null ? CountryService.getCountryName(res.countryCode!) : node.country),
     );
 
     if (mounted) {
@@ -353,8 +353,8 @@ class _SubscriptionsViewState extends ConsumerState<SubscriptionsView> {
           ref.read(nodesProvider.notifier).updateLatency(
             n.id,
             res.latencyMs,
-            countryCode: res.countryCode,
-            country: res.country,
+            countryCode: res.countryCode ?? n.countryCode ?? CountryService.resolveSync(n),
+            country: res.country ?? (res.countryCode != null ? CountryService.getCountryName(res.countryCode!) : n.country),
           );
           final tested = (_subTestedCount[subId] ?? 0) + 1;
           String? eta;

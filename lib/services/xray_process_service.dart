@@ -999,6 +999,9 @@ class XrayProcessService {
     final validNodes = nodes.where(isNodeConfigSupported).toList();
     if (validNodes.isEmpty) return {};
 
+    if (Platform.isAndroid && _androidBinaryPath == null) {
+      await initAndroid();
+    }
     final xrayBin = _findXrayBinary();
     if (xrayBin == null) return {};
 
@@ -1040,7 +1043,14 @@ class XrayProcessService {
 
     final testConfig = {
       'log': {'loglevel': 'none'},
-      'dns': {'servers': ['1.1.1.1', '8.8.8.8', 'localhost']},
+      'dns': {
+        'hosts': {
+          'cp.cloudflare.com': ['104.16.132.229', '104.16.133.229'],
+          'www.gstatic.com': ['142.250.180.3'],
+          'www.google.com': ['142.250.180.4']
+        },
+        'servers': ['localhost', 'https://1.1.1.1/dns-query']
+      },
       'inbounds': inbounds,
       'outbounds': outbounds,
       'routing': {
@@ -1063,8 +1073,24 @@ class XrayProcessService {
         workingDirectory: _getWorkingDirectory(xrayBin),
         environment: _getXrayEnvironment(),
       );
-      // Fast startup delay for localhost socket binding
-      await Future.delayed(const Duration(milliseconds: 40));
+
+      // Actively poll until Xray binds to basePort (up to 2500ms)
+      bool isReady = false;
+      final readySw = Stopwatch()..start();
+      while (readySw.elapsedMilliseconds < 2500) {
+        try {
+          final s = await Socket.connect('127.0.0.1', basePort, timeout: const Duration(milliseconds: 100));
+          s.destroy();
+          isReady = true;
+          break;
+        } catch (_) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      }
+      if (!isReady) {
+        proc.kill();
+        return {};
+      }
 
       final results = <String, NodeTestResult>{};
       await Future.wait(List.generate(validNodes.length, (i) async {
@@ -1089,7 +1115,9 @@ class XrayProcessService {
             if (resp.statusCode == 200) {
               final body = await resp.transform(utf8.decoder).join().timeout(timeout);
               final trace = NodeTestResult.parseCloudflareTrace(body);
-              cCode = trace.loc;
+              if (trace.loc != null && trace.loc!.isNotEmpty && trace.loc != 'XX') {
+                cCode = trace.loc;
+              }
               exitIp = trace.ip;
               if (cCode == null && exitIp != null) {
                 cCode = LocalGeoIp.instance.lookup(exitIp);
@@ -1100,7 +1128,10 @@ class XrayProcessService {
             }
           } catch (_) {}
 
-          final resolvedCode = cCode ?? node.countryCode ?? CountryService.resolveSync(node);
+          if (cCode == null && exitIp != null) {
+            cCode = LocalGeoIp.instance.lookup(exitIp);
+          }
+          final resolvedCode = cCode ?? node.countryCode ?? await CountryService.instance.resolveCountryCode(node);
           final resolvedName = cName ?? (resolvedCode != null ? CountryService.getCountryName(resolvedCode) : node.country);
           results[node.id] = NodeTestResult(
             latencyMs: lowestPing,
@@ -1193,27 +1224,48 @@ class XrayProcessService {
   }) async {
     // 1. If this node is currently connected and active in Xray / Android VPN, test real end-to-end internet ping via running local proxy
     final isRunningLocally = _state == EngineState.running || (Platform.isAndroid && await isAndroidVpnRunning());
-    if (isRunningLocally && (node.isActive || _activeRunningNode?.id == node.id)) {
+    final isCurrentActiveNode = _activeRunningNode != null && (
+      node.id == _activeRunningNode!.id ||
+      (node.address == _activeRunningNode!.address && node.port == _activeRunningNode!.port) ||
+      (node.uuidOrPassword.isNotEmpty && node.uuidOrPassword == _activeRunningNode!.uuidOrPassword)
+    );
+
+    if (isRunningLocally && (node.isActive || isCurrentActiveNode)) {
       final activeRes = await _testHttpViaLocalProxy(timeout);
       if (activeRes != null && activeRes.isSuccess) {
-        final cCode = node.countryCode ?? CountryService.resolveSync(node);
+        final cCode = activeRes.countryCode ??
+            _activeRunningNode?.countryCode ??
+            node.countryCode ??
+            await CountryService.instance.resolveCountryCode(node);
+        final cName = activeRes.country ??
+            _activeRunningNode?.country ??
+            (cCode != null ? CountryService.getCountryName(cCode) : node.country);
         return NodeTestResult(
           latencyMs: activeRes.latencyMs,
-          countryCode: activeRes.countryCode ?? cCode,
-          country: activeRes.country ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country),
-          exitIp: activeRes.exitIp,
+          countryCode: cCode,
+          country: cName,
+          exitIp: activeRes.exitIp ?? _activeRunningNode?.country,
         );
       }
     }
 
     // 2. Pre-connection Real Delay testing (Matching v2rayN and v2rayNG):
     // When Xray core is present, spin up an ephemeral test instance to route authentic generate_204 through proxy
+    if (Platform.isAndroid && _androidBinaryPath == null) {
+      await initAndroid();
+    }
     if (_findXrayBinary() != null && isNodeConfigSupported(node)) {
       try {
         final batchResults = await testNodesBatchRealProxy([node], timeout: timeout);
         final res = batchResults[node.id];
         if (res != null && res.isSuccess) {
-          return res;
+          final cCode = res.countryCode ?? node.countryCode ?? await CountryService.instance.resolveCountryCode(node);
+          return NodeTestResult(
+            latencyMs: res.latencyMs,
+            countryCode: cCode,
+            country: res.country ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country),
+            exitIp: res.exitIp,
+          );
         }
       } catch (_) {}
     }
@@ -1221,7 +1273,7 @@ class XrayProcessService {
     // 3. Fallback: Direct protocol probe
     final handshakeLat = await _testNodeRealProtocolDelay(node, timeout: timeout, count: 2);
     if (handshakeLat != null && handshakeLat > 0) {
-      final cCode = node.countryCode ?? CountryService.resolveSync(node);
+      final cCode = node.countryCode ?? await CountryService.instance.resolveCountryCode(node);
       return NodeTestResult(
         latencyMs: handshakeLat,
         countryCode: cCode,
@@ -1259,7 +1311,9 @@ class XrayProcessService {
         if (response.statusCode == 200) {
           final body = await response.transform(utf8.decoder).join().timeout(timeout);
           final trace = NodeTestResult.parseCloudflareTrace(body);
-          cCode = trace.loc;
+          if (trace.loc != null && trace.loc!.isNotEmpty && trace.loc != 'XX') {
+            cCode = trace.loc;
+          }
           exitIp = trace.ip;
           if (cCode == null && exitIp != null) {
             cCode = LocalGeoIp.instance.lookup(exitIp);
@@ -1269,6 +1323,30 @@ class XrayProcessService {
           }
         }
       } catch (_) {}
+
+      // 3. Fallback IP/Geo APIs via proxy if Cloudflare trace didn't resolve country
+      if (cCode == null || cCode.isEmpty) {
+        try {
+          final req = await client.getUrl(Uri.parse("http://ip-api.com/json/")).timeout(const Duration(seconds: 2));
+          final resp = await req.close().timeout(const Duration(seconds: 2));
+          if (resp.statusCode == 200) {
+            final body = await resp.transform(utf8.decoder).join();
+            final data = jsonDecode(body);
+            if (data["status"] == "success") {
+              exitIp ??= data["query"]?.toString();
+              cCode = data["countryCode"]?.toString();
+              cName = data["country"]?.toString();
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (cCode == null && exitIp != null) {
+        cCode = LocalGeoIp.instance.lookup(exitIp);
+        if (cCode != null) {
+          cName = CountryService.getCountryName(cCode);
+        }
+      }
 
       client.close(force: true);
 
@@ -1338,25 +1416,31 @@ class XrayProcessService {
 
       // Check if node uses HTTP / WebSocket / XHTTP / SplitHTTP transport
       // NOTE: NetworkType.tcp MUST NOT send websocket upgrade!
-      final isHttpTransport = node.network == NetworkType.ws ||
-          node.network == NetworkType.httpUpgrade ||
-          node.network == NetworkType.xhttp ||
+      final isWsTransport = node.network == NetworkType.ws ||
+          node.network == NetworkType.httpUpgrade;
+      final isHttpStreamTransport = node.network == NetworkType.xhttp ||
           node.network == NetworkType.splithttp;
 
-      if (isHttpTransport) {
+      if (isWsTransport || isHttpStreamTransport) {
         final path = (node.path == null || node.path!.isEmpty)
             ? '/'
             : (node.path!.startsWith('/') ? node.path! : '/${node.path}');
 
-        final httpRequest =
-            'GET $path HTTP/1.1\r\n'
-            'Host: $host\r\n'
-            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n'
-            'Upgrade: websocket\r\n'
-            'Connection: Upgrade\r\n'
-            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
-            'Sec-WebSocket-Version: 13\r\n'
-            '\r\n';
+        final httpRequest = isWsTransport
+            ? 'GET $path HTTP/1.1\r\n'
+              'Host: $host\r\n'
+              'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n'
+              'Upgrade: websocket\r\n'
+              'Connection: Upgrade\r\n'
+              'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+              'Sec-WebSocket-Version: 13\r\n'
+              '\r\n'
+            : 'GET $path HTTP/1.1\r\n'
+              'Host: $host\r\n'
+              'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n'
+              'Accept: */*\r\n'
+              'Connection: close\r\n'
+              '\r\n';
 
         activeSocket.add(utf8.encode(httpRequest));
         await activeSocket.flush();
@@ -1389,11 +1473,13 @@ class XrayProcessService {
                   responseStr.contains('<HTML') ||
                   responseStr.contains('<title>');
 
-              // Authentic 101 Switching Protocols, 200/204, or non-HTML 400 (standard raw Xray/V2Ray origin response):
-              // Reject 403, 404, 301, 302, 5xx, or CDN HTML error pages
+              // Authentic 101 Switching Protocols, 200/204, or non-HTML 400/404 (standard raw Xray/V2Ray origin response):
+              // Reject 403, 301, 302, 5xx, or CDN HTML error pages
               final isAcceptableStatus = (firstLine.contains(' 101 ') ||
                       firstLine.contains(' 200 ') ||
-                      firstLine.contains(' 204 ')) &&
+                      firstLine.contains(' 204 ') ||
+                      firstLine.contains(' 400 ') ||
+                      firstLine.contains(' 404 ')) &&
                   !isCdnError;
 
               if (isAcceptableStatus) {

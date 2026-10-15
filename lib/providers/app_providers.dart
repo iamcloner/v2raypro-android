@@ -379,13 +379,13 @@ class NodesNotifier extends StateNotifier<List<ProxyNode>> {
         final bool isSuccess = latencyMs != null && latencyMs > 0;
         final String? fromName = CountryService.extractCountryCodeFromName(n.name);
         final String? verifiedCountryCode = isSuccess
-            ? (countryCode ?? n.countryCode)
-            : fromName;
+            ? (countryCode ?? n.countryCode ?? CountryService.resolveSync(n))
+            : (countryCode ?? n.countryCode ?? fromName ?? CountryService.resolveSync(n));
         final String? verifiedCountry = isSuccess
             ? (country ?? (verifiedCountryCode != null ? CountryService.getCountryName(verifiedCountryCode) : n.country))
-            : (fromName != null ? CountryService.getCountryName(fromName) : null);
+            : (country ?? (verifiedCountryCode != null ? CountryService.getCountryName(verifiedCountryCode) : n.country));
 
-        final bool clearCountry = !isSuccess && fromName == null;
+        final bool clearCountry = !isSuccess && fromName == null && n.countryCode == null && CountryService.resolveSync(n) == null;
 
         return n.copyWith(
           latencyMs: latencyMs,

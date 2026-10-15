@@ -214,10 +214,12 @@ class FreeConfigsService {
           testedCount++;
 
           if (res.isSuccess) {
+            final cCode = res.countryCode ?? node.countryCode ?? CountryService.resolveSync(node);
+            final cName = res.country ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country);
             final testedNode = node.copyWith(
               latencyMs: res.latencyMs,
-              countryCode: res.countryCode,
-              country: res.country,
+              countryCode: cCode,
+              country: cName,
               lastTestedAt: DateTime.now(),
             );
             workingNodes.add(testedNode);
