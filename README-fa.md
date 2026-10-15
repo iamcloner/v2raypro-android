@@ -1,4 +1,4 @@
-﻿# نرم‌افزار V2RayPro برای اندروید
+# نرم‌افزار V2RayPro برای اندروید
 
 <p align=center>
   <img src=assets/app_icon.png alt=لوگوی V2RayPro width=100 height=100 />
@@ -58,12 +58,10 @@
 
 ## 📥 دانلود فایل نصبی APK
 
-| نسخه | معماری | فایل نصبی | چکسام اعتبارسنجی |
-| :---: | :---: | :---: | :---: |
-| **v1.0.0** | تمام پردازنده‌ها (rm64-v8a, rmeabi-v7a, x86_64) | [دانلود مستقیم APK](release/v2raypro-v1.0.0-android.apk) | [sha256sum.txt](release/sha256sum.txt) |
+👉 برای دانلود آخرین نسخه فایل نصبی APK، به بخش [ریلیزهای گیت‌هاب (GitHub Releases)](https://github.com/iamcloner/v2raypro-android/releases) مراجعه نمایید.
 
 ### مراحل نصب
-1. فایل 2raypro-v1.0.0-android.apk را از پوشه [release](release/v2raypro-v1.0.0-android.apk) دریافت نمایید.
+1. آخرین فایل APK منتشر شده را از بخش [ریلیزها](https://github.com/iamcloner/v2raypro-android/releases) دانلود کنید.
 2. روی فایل دریافتی در دستگاه اندرویدی خود (اندروید نسخه ۷.۰ به بالا) ضربه بزنید.
 3. در صورت درخواست، گزینه نصب از منابع ناشناس (Allow from unknown sources) را تایید کنید.
 4. برنامه را باز کرده و با لمس دکمه اتصال متصل شوید.

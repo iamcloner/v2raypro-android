@@ -60,12 +60,10 @@
 
 ## 📥 Download APK
 
-| Version | Architecture | Release File | Checksum |
-| :---: | :---: | :---: | :---: |
-| **v1.0.0** | Universal (`arm64-v8a`, `armeabi-v7a`, `x86_64`) | [Download APK](release/v2raypro-v1.0.0-android.apk) | [sha256sum.txt](release/sha256sum.txt) |
+👉 Download the latest APK release from [GitHub Releases](https://github.com/iamcloner/v2raypro-android/releases).
 
 ### Installation Instructions
-1. Download `v2raypro-v1.0.0-android.apk` from the [release](release/v2raypro-v1.0.0-android.apk) directory.
+1. Download the latest `.apk` file from [Releases](https://github.com/iamcloner/v2raypro-android/releases).
 2. Tap the downloaded APK file on your Android device (Android 7.0+).
 3. Allow "Install from unknown sources" if prompted.
 4. Launch **V2RayPro**, import your configs or subscriptions, and tap the connect button.

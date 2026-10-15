@@ -1147,69 +1147,48 @@ class XrayProcessService {
     return lowestPing;
   }
 
-  /// Pings google.com:443 via an established HTTP proxy client up to [count] times (default 3),
-  /// returning the lowest latency in milliseconds, or null if all attempts fail.
+  /// Pings authentic generate_204 endpoints (Cloudflare & Google gstatic) via an established HTTP proxy client,
+  /// returning the lowest latency in milliseconds matching true v2rayN and v2rayNG Real Delay (~600ms), or null if all attempts fail.
   Future<int?> pingGoogleViaProxy(
     HttpClient client, {
-    int count = 3,
-    Duration timeout = const Duration(milliseconds: 2500),
+    int count = 2,
+    Duration timeout = const Duration(milliseconds: 3000),
   }) async {
     int? lowestPing;
+    final testUrls = [
+      'http://cp.cloudflare.com/generate_204',
+      'http://www.gstatic.com/generate_204',
+      'http://www.google.com/generate_204',
+    ];
+
     for (int attempt = 0; attempt < count; attempt++) {
-      // 1. Primary: http://www.google.com/generate_204
-      // Provides authentic Real Delay through proxy matching v2rayN and v2rayNG without nested double-TLS overhead
-      final swHttp = Stopwatch()..start();
-      try {
-        final r = await client.getUrl(Uri.parse('http://www.google.com/generate_204')).timeout(timeout);
-        final resp = await r.close().timeout(timeout);
-        swHttp.stop();
-        if (resp.statusCode == 204 || resp.statusCode == 200) {
-          final lat = swHttp.elapsedMilliseconds;
-          if (lowestPing == null || lat < lowestPing) {
-            lowestPing = lat;
+      for (final url in testUrls) {
+        final sw = Stopwatch()..start();
+        try {
+          final req = await client.getUrl(Uri.parse(url)).timeout(timeout);
+          req.followRedirects = false;
+          final resp = await req.close().timeout(timeout);
+          await resp.drain().timeout(const Duration(milliseconds: 500), onTimeout: () => null);
+          sw.stop();
+          if (resp.statusCode == 204 || resp.statusCode == 200) {
+            final lat = sw.elapsedMilliseconds;
+            if (lowestPing == null || lat < lowestPing) {
+              lowestPing = lat;
+            }
+            break;
           }
-          continue;
-        }
-      } catch (_) {}
-
-      // 2. Secondary fallback: http://cp.cloudflare.com/generate_204
-      final swCf = Stopwatch()..start();
-      try {
-        final r = await client.getUrl(Uri.parse('http://cp.cloudflare.com/generate_204')).timeout(timeout);
-        final resp = await r.close().timeout(timeout);
-        swCf.stop();
-        if (resp.statusCode == 204 || resp.statusCode == 200) {
-          final lat = swCf.elapsedMilliseconds;
-          if (lowestPing == null || lat < lowestPing) {
-            lowestPing = lat;
-          }
-          continue;
-        }
-      } catch (_) {}
-
-      // 3. Third fallback: https://www.google.com/generate_204
-      final swHttps = Stopwatch()..start();
-      try {
-        final r = await client.getUrl(Uri.parse('https://www.google.com/generate_204')).timeout(timeout);
-        final resp = await r.close().timeout(timeout);
-        swHttps.stop();
-        if (resp.statusCode == 204 || resp.statusCode == 200) {
-          final lat = swHttps.elapsedMilliseconds;
-          if (lowestPing == null || lat < lowestPing) {
-            lowestPing = lat;
-          }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
     }
     return lowestPing;
   }
 
   /// Real Latency & Outbound Country Test:
-  /// Performs an authentic 3-probe handshake test (matching v2rayNG & v2box TCPing and TLS ping)
-  /// or end-to-end proxy test if the node is currently connected and active.
+  /// Performs an authentic end-to-end proxy delay test (~600ms matching v2rayN and v2rayNG)
+  /// using active proxy or ephemeral test instance, falling back to protocol probe.
   Future<NodeTestResult> testNodeRealDelay(
     ProxyNode node, {
-    Duration timeout = const Duration(milliseconds: 2800),
+    Duration timeout = const Duration(milliseconds: 3500),
     bool isTurbo = false,
   }) async {
     // 1. If this node is currently connected and active in Xray / Android VPN, test real end-to-end internet ping via running local proxy
@@ -1227,9 +1206,20 @@ class XrayProcessService {
       }
     }
 
-    // 2. Direct protocol probe (TCP/TLS handshake to node.address:node.port, 3 probes, taking lowest):
-    // Exactly matches v2rayNG and v2box latency!
-    final handshakeLat = await _testNodeRealProtocolDelay(node, timeout: timeout, count: 3);
+    // 2. Pre-connection Real Delay testing (Matching v2rayN and v2rayNG):
+    // When Xray core is present, spin up an ephemeral test instance to route authentic generate_204 through proxy
+    if (_findXrayBinary() != null && isNodeConfigSupported(node)) {
+      try {
+        final batchResults = await testNodesBatchRealProxy([node], timeout: timeout);
+        final res = batchResults[node.id];
+        if (res != null && res.isSuccess) {
+          return res;
+        }
+      } catch (_) {}
+    }
+
+    // 3. Fallback: Direct protocol probe
+    final handshakeLat = await _testNodeRealProtocolDelay(node, timeout: timeout, count: 2);
     if (handshakeLat != null && handshakeLat > 0) {
       final cCode = node.countryCode ?? CountryService.resolveSync(node);
       return NodeTestResult(
@@ -1403,8 +1393,7 @@ class XrayProcessService {
               // Reject 403, 404, 301, 302, 5xx, or CDN HTML error pages
               final isAcceptableStatus = (firstLine.contains(' 101 ') ||
                       firstLine.contains(' 200 ') ||
-                      firstLine.contains(' 204 ') ||
-                      firstLine.contains(' 400 ')) &&
+                      firstLine.contains(' 204 ')) &&
                   !isCdnError;
 
               if (isAcceptableStatus) {

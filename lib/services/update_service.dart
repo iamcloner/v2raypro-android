@@ -69,7 +69,7 @@ class UpdateService {
     _cachedCurrentVersion = null;
   }
 
-  static const String defaultAppRepoUrl = "https://github.com/iamcloner/v2raypro/releases";
+  static const String defaultAppRepoUrl = "https://github.com/iamcloner/v2raypro-android/releases";
   static const String defaultAppTestUrl = defaultAppRepoUrl;
 
   HttpClient _createHttpClient() {
@@ -438,9 +438,17 @@ class UpdateService {
     final bodyNotes = json["body"] as String? ?? "";
     final assets = (json["assets"] as List<dynamic>? ?? []);
 
-    String? zipDownloadUrl = findOsSpecificZipAsset(assets);
-    zipDownloadUrl ??= json["zipball_url"] as String?;
-    zipDownloadUrl ??= "https://github.com/iamcloner/v2raypro/releases/download/$tagName/v2raypro-$tagName-windows.zip";
+    String? fileDownloadUrl;
+    for (final a in assets) {
+      if (a is Map) {
+        final name = (a["name"] as String? ?? "").toLowerCase();
+        if (name.endsWith('.apk')) {
+          fileDownloadUrl = a["browser_download_url"] as String?;
+          break;
+        }
+      }
+    }
+    fileDownloadUrl ??= "https://github.com/iamcloner/v2raypro-android/releases/download/$tagName/v2raypro-$tagName-android.apk";
 
     final hasUpdate = isVersionNewer(tagName, currentAppVersion);
 
@@ -448,7 +456,7 @@ class UpdateService {
       currentVersion: currentAppVersion,
       latestVersion: tagName.isNotEmpty ? tagName : currentAppVersion,
       hasUpdate: hasUpdate,
-      downloadUrl: zipDownloadUrl,
+      downloadUrl: fileDownloadUrl,
       releaseNotes: bodyNotes,
     );
   }
@@ -551,16 +559,16 @@ class UpdateService {
       }
     }
 
-    // 2. Default: Query GitHub API for latest release on iamcloner/v2raypro
+    // 2. Default: Query GitHub API for latest release on iamcloner/v2raypro-android
     final repos = [
-      "iamcloner/v2raypro",
+      "iamcloner/v2raypro-android",
     ];
 
     for (final repo in repos) {
       try {
         // First try /releases/latest
         final reqLatest = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases/latest"));
-        reqLatest.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Client/1.2.0");
+        reqLatest.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.0");
         reqLatest.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
         final resLatest = await reqLatest.close().timeout(const Duration(seconds: 10));
         if (resLatest.statusCode == 200) {
@@ -571,7 +579,7 @@ class UpdateService {
 
         // Fallback to releases list
         final req = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases?per_page=5"));
-        req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Client/1.2.0");
+        req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.0");
         req.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
         final res = await req.close().timeout(const Duration(seconds: 10));
         if (res.statusCode == 200) {
@@ -590,7 +598,7 @@ class UpdateService {
       currentVersion: currentAppVersion,
       latestVersion: currentAppVersion,
       hasUpdate: false,
-      downloadUrl: "https://github.com/iamcloner/v2raypro/releases/download/v1.7.3/v2raypro-windows-v1.7.3.zip",
+      downloadUrl: "https://github.com/iamcloner/v2raypro-android/releases",
     );
   }
 
