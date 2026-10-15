@@ -17,6 +17,7 @@ import "../services/cloudflare_scanner_service.dart";
 import "../services/log_service.dart";
 import "../services/storage_service.dart";
 import "../services/tray_service.dart";
+import "../services/real_delay_service.dart";
 import "../services/xray_process_service.dart";
 import "../services/free_configs_service.dart";
 import "../services/country_service.dart";
@@ -76,14 +77,18 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
     final nodes = ref.read(nodesProvider);
     if (nodes.isEmpty) return;
     final active = nodes.firstWhere((n) => n.isActive, orElse: () => nodes.first);
-    final res = await XrayProcessService.instance.testNodeRealDelay(active);
+    final res = await testRealDelay(
+      mode: 'normal',
+      type: 'xray',
+      config: active.toJson(),
+    );
     final outbound = ref.read(outboundInfoProvider);
-    final country = res.countryCode ?? outbound.countryCode ?? active.countryCode;
+    final country = res.country?.toUpperCase() ?? outbound.countryCode ?? active.countryCode;
     ref.read(nodesProvider.notifier).updateLatency(
       active.id,
-      res.latencyMs ?? active.latencyMs,
+      res.ping ?? active.latencyMs,
       countryCode: country,
-      country: CountryService.getCountryName(country) ?? outbound.country ?? active.country,
+      country: res.countryName ?? (country != null ? CountryService.getCountryName(country) : null) ?? outbound.country ?? active.country,
     );
   }
 
@@ -1055,8 +1060,10 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
                 : (isDomain ? origAddress : null),
           );
 
-          final res = await XrayProcessService.instance.testNodeRealDelay(
-            cand,
+          final res = await testRealDelay(
+            mode: 'turbo',
+            type: 'xray',
+            config: cand.toJson(),
             timeout: const Duration(milliseconds: 1800),
           );
 
@@ -1068,11 +1075,11 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
           );
 
           final isVerified = res.isSuccess &&
-              res.latencyMs != null &&
-              res.latencyMs! > 0;
+              res.ping != null &&
+              res.ping! > 0;
 
           if (isVerified) {
-            final lat = res.latencyMs!;
+            final lat = res.ping!;
             final cCode = (res.countryCode != null && res.countryCode!.isNotEmpty && res.countryCode != 'XX')
                 ? res.countryCode!
                 : (CountryService.extractCountryCodeFromName(activeNode.name) ?? 'XX');
@@ -1217,8 +1224,10 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
                 : (isDomain ? origAddress : null),
           );
 
-          final res = await XrayProcessService.instance.testNodeRealDelay(
-            cand,
+          final res = await testRealDelay(
+            mode: 'turbo',
+            type: 'xray',
+            config: cand.toJson(),
             timeout: const Duration(milliseconds: 1800),
           );
 

@@ -56,6 +56,7 @@ class XrayProcessService {
 
   File? _currentConfigFile;
   ProxyNode? _activeRunningNode;
+  ProxyNode? get activeRunningNode => _activeRunningNode;
   int socksPort = 10999;
   int httpPort = 10888;
   int apiPort = 10085;
@@ -77,6 +78,7 @@ class XrayProcessService {
   TrafficStats get currentTrafficStats => _currentTrafficStats;
 
   String? _androidBinaryPath;
+  String? get androidBinaryPath => _androidBinaryPath;
   Directory? _androidAssetDir;
   VoidCallback? onAndroidNotificationDisconnect;
 

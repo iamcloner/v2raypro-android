@@ -9,7 +9,7 @@ import 'core/l10n/translations.dart';
 import 'core/theme/app_theme.dart';
 import 'models/proxy_node.dart';
 import 'providers/app_providers.dart';
-import 'services/xray_process_service.dart';
+import 'services/real_delay_service.dart';
 import 'utils/config_parser.dart';
 import 'utils/ip_mask_util.dart';
 import 'widgets/add_config_dialog.dart';
@@ -129,15 +129,16 @@ class _ConfigsViewState extends ConsumerState<ConfigsView> {
     });
 
     final testMode = ref.read(testModeProvider);
-    final res = await XrayProcessService.instance.testNodeRealDelay(
-      node,
-      isTurbo: testMode == TestMode.turbo,
+    final res = await testRealDelay(
+      mode: testMode == TestMode.turbo ? 'turbo' : 'normal',
+      type: 'xray',
+      config: node.toJson(),
     );
     ref.read(nodesProvider.notifier).updateLatency(
       node.id,
-      res.latencyMs,
-      countryCode: res.countryCode ?? node.countryCode ?? CountryService.resolveSync(node),
-      country: res.country ?? (res.countryCode != null ? CountryService.getCountryName(res.countryCode!) : node.country),
+      res.ping,
+      countryCode: res.country?.toUpperCase() ?? node.countryCode ?? CountryService.resolveSync(node),
+      country: res.countryName ?? (res.country != null ? CountryService.getCountryName(res.country!.toUpperCase()) : node.country),
     );
 
     if (mounted) {
@@ -173,6 +174,8 @@ class _ConfigsViewState extends ConsumerState<ConfigsView> {
     final activeNode = allNodes.where((n) => n.isActive).firstOrNull;
     final connState = ref.read(connectionStatusProvider);
     final isConnected = connState == ConnectionStateEnum.connected;
+    final testMode = ref.read(testModeProvider);
+    final modeStr = testMode == TestMode.turbo ? 'turbo' : 'normal';
 
     for (int i = 0; i < nodes.length; i += batchSize) {
       if (_cancelTestingAll || !mounted) break;
@@ -180,12 +183,16 @@ class _ConfigsViewState extends ConsumerState<ConfigsView> {
       final end = math.min(i + batchSize, nodes.length);
       final chunk = nodes.sublist(i, end);
 
-      final Map<String, NodeTestResult> batchResults = {};
+      final Map<String, RealDelayResult> batchResults = {};
       final nodesForBatch = <ProxyNode>[];
 
       for (final n in chunk) {
         if (isConnected && (n.isActive || (activeNode != null && n.id == activeNode.id))) {
-          final res = await XrayProcessService.instance.testNodeRealDelay(n);
+          final res = await testRealDelay(
+            mode: modeStr,
+            type: 'xray',
+            config: n.toJson(),
+          );
           batchResults[n.id] = res;
         } else {
           nodesForBatch.add(n);
@@ -193,26 +200,21 @@ class _ConfigsViewState extends ConsumerState<ConfigsView> {
       }
 
       if (nodesForBatch.isNotEmpty) {
-        final resMap = await XrayProcessService.instance.testNodesBatchRealProxy(nodesForBatch);
-        if (resMap.isNotEmpty) {
-          batchResults.addAll(resMap);
-        } else {
-          // Fallback if batch runner returned empty
-          for (final n in nodesForBatch) {
-            if (_cancelTestingAll || !mounted) break;
-            final res = await XrayProcessService.instance.testNodeRealDelay(n);
-            batchResults[n.id] = res;
-          }
-        }
+        final resMap = await testRealDelayBatch(
+          mode: modeStr,
+          type: 'xray',
+          configs: nodesForBatch.map((n) => n.toJson()).toList(),
+        );
+        batchResults.addAll(resMap);
       }
 
       if (_cancelTestingAll || !mounted) break;
 
       for (final n in chunk) {
         final res = batchResults[n.id];
-        final lat = (res != null && res.isSuccess) ? res.latencyMs : -1;
-        final cCode = res?.countryCode ?? n.countryCode ?? CountryService.resolveSync(n);
-        final cName = res?.country ?? (cCode != null ? CountryService.getCountryName(cCode) : n.country);
+        final lat = (res != null && res.isSuccess) ? res.ping : -1;
+        final cCode = res?.country?.toUpperCase() ?? n.countryCode ?? CountryService.resolveSync(n);
+        final cName = res?.countryName ?? (cCode != null ? CountryService.getCountryName(cCode) : n.country);
 
         ref.read(nodesProvider.notifier).updateLatency(
           n.id,

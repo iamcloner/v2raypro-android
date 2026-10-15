@@ -26,6 +26,7 @@ import 'services/cdn_scanner_service.dart';
 import 'services/tray_service.dart';
 import 'services/update_service.dart';
 import 'package:local_notifier/local_notifier.dart';
+import 'services/real_delay_service.dart';
 import 'services/xray_process_service.dart';
 import 'utils/ip_mask_util.dart';
 import 'widgets/country_flag_badge.dart';
@@ -994,13 +995,17 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   Future<void> _retestPing(ProxyNode node) async {
     if (_isTestingPing) return;
     setState(() => _isTestingPing = true);
-    final res = await XrayProcessService.instance.testNodeRealDelay(node);
+    final res = await testRealDelay(
+      mode: 'normal',
+      type: 'xray',
+      config: node.toJson(),
+    );
     if (mounted) {
       ref.read(nodesProvider.notifier).updateLatency(
         node.id,
-        res.latencyMs,
-        countryCode: res.countryCode,
-        country: res.country,
+        res.ping,
+        countryCode: res.country?.toUpperCase(),
+        country: res.countryName,
       );
       setState(() => _isTestingPing = false);
     }

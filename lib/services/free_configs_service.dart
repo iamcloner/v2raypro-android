@@ -5,6 +5,7 @@ import 'dart:math';
 import '../models/proxy_node.dart';
 import '../utils/config_parser.dart';
 import 'storage_service.dart';
+import 'real_delay_service.dart';
 import 'xray_process_service.dart';
 import 'country_service.dart';
 
@@ -202,8 +203,10 @@ class FreeConfigsService {
         final end = min(i + batchSize, uniqueNodes.length);
         final chunk = uniqueNodes.sublist(i, end);
 
-        final resMap = await XrayProcessService.instance.testNodesBatchRealProxy(
-          chunk,
+        final resMap = await testRealDelayBatch(
+          mode: testMode != null && testMode.toString().contains('turbo') ? 'turbo' : 'normal',
+          type: 'xray',
+          configs: chunk.map((n) => n.toJson()).toList(),
           timeout: const Duration(milliseconds: 3200),
         );
         if (_isCancelled) break;
@@ -212,10 +215,10 @@ class FreeConfigsService {
           testedCount++;
           final res = resMap[node.id];
           if (res != null && res.isSuccess) {
-            final cCode = res.countryCode ?? node.countryCode ?? CountryService.resolveSync(node);
-            final cName = res.country ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country);
+            final cCode = res.country?.toUpperCase() ?? node.countryCode ?? CountryService.resolveSync(node);
+            final cName = res.countryName ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country);
             final testedNode = node.copyWith(
-              latencyMs: res.latencyMs,
+              latencyMs: res.ping,
               countryCode: cCode,
               country: cName,
               lastTestedAt: DateTime.now(),
