@@ -383,10 +383,10 @@ Future<RealDelayResult> _probeProxyEndpoint({
       final sw = Stopwatch()..start();
       final req = await client.getUrl(Uri.parse('http://cp.cloudflare.com/cdn-cgi/trace')).timeout(timeout);
       final resp = await req.close().timeout(timeout);
+      sw.stop();
       if (resp.statusCode == 200) {
-        final body = await resp.transform(utf8.decoder).join().timeout(const Duration(milliseconds: 600));
-        sw.stop();
         ping = sw.elapsedMilliseconds;
+        final body = await resp.transform(utf8.decoder).join().timeout(const Duration(milliseconds: 600));
         final trace = NodeTestResult.parseCloudflareTrace(body);
         if (trace.loc != null && trace.loc!.isNotEmpty && trace.loc != 'XX') {
           country = trace.loc!.toLowerCase();
@@ -401,7 +401,7 @@ Future<RealDelayResult> _probeProxyEndpoint({
 
     // 2. Normal mode: probe generate_204 to get lowest ping
     if (!isTurbo || ping == null) {
-      final genPing = await XrayProcessService.instance.pingGoogleViaProxy(client, count: 1, timeout: timeout);
+      final genPing = await XrayProcessService.instance.pingGoogleViaProxy(client, count: 2, timeout: timeout);
       if (genPing != null && genPing > 0) {
         ping = ping == null ? genPing : math.min(ping, genPing);
       }

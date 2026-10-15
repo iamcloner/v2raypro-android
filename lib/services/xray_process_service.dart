@@ -2,6 +2,7 @@ import "dart:async";
 import "dart:convert";
 import "dart:ffi" as ffi;
 import "dart:io";
+import "dart:math" as math;
 import "package:flutter/services.dart";
 import "package:path_provider/path_provider.dart";
 import "../models/proxy_node.dart";
@@ -1131,10 +1132,10 @@ class XrayProcessService {
           final sw = Stopwatch()..start();
           final r = await client.getUrl(Uri.parse('http://cp.cloudflare.com/cdn-cgi/trace')).timeout(timeout);
           final resp = await r.close().timeout(timeout);
+          sw.stop();
           if (resp.statusCode == 200) {
-            final body = await resp.transform(utf8.decoder).join().timeout(const Duration(milliseconds: 600));
-            sw.stop();
             testPing = sw.elapsedMilliseconds;
+            final body = await resp.transform(utf8.decoder).join().timeout(const Duration(milliseconds: 600));
             final trace = NodeTestResult.parseCloudflareTrace(body);
             if (trace.loc != null && trace.loc!.isNotEmpty && trace.loc != 'XX') {
               cCode = trace.loc;
@@ -1143,10 +1144,14 @@ class XrayProcessService {
           }
         } catch (_) {}
 
-        // 2. Fallback: If cdn-cgi/trace failed, probe generate_204 to get genuine latency
-        if (testPing == null) {
-          testPing = await pingGoogleViaProxy(client, count: 1, timeout: timeout);
-        }
+        // 2. Measure genuine HTTP real delay via generate_204 on the established connection
+        // (matches connected state ping by eliminating cold-start TLS negotiation & body overhead)
+        try {
+          final genPing = await pingGoogleViaProxy(client, count: 2, timeout: timeout);
+          if (genPing != null && genPing > 0) {
+            testPing = testPing == null ? genPing : math.min(testPing, genPing);
+          }
+        } catch (_) {}
 
         if (testPing != null && testPing > 0) {
           if (cCode == null && exitIp != null) {
@@ -1220,8 +1225,8 @@ class XrayProcessService {
           final req = await client.getUrl(Uri.parse(url)).timeout(timeout);
           req.followRedirects = false;
           final resp = await req.close().timeout(timeout);
-          await resp.drain().timeout(const Duration(milliseconds: 500), onTimeout: () => null);
           sw.stop();
+          await resp.drain().timeout(const Duration(milliseconds: 500), onTimeout: () => null);
           if (resp.statusCode == 204 || resp.statusCode == 200) {
             final lat = sw.elapsedMilliseconds;
             if (lowestPing == null || lat < lowestPing) {
