@@ -272,6 +272,14 @@ class _MainShellState extends ConsumerState<MainShell> {
                 onPressed: downloading || info.downloadUrl == null
                     ? null
                     : () async {
+                        if (Platform.isAndroid) {
+                          Navigator.of(dialogCtx).pop();
+                          await UpdateService.instance.downloadAndApplyAppUpdate(
+                            info.downloadUrl ?? "https://github.com/iamcloner/v2raypro-android/releases",
+                          );
+                          return;
+                        }
+
                         setDialogState(() {
                           downloading = true;
                           progress = 0.0;

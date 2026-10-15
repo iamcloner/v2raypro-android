@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'xray_process_service.dart';
 
 class UpdateInfo {
@@ -461,137 +462,38 @@ class UpdateService {
     );
   }
 
-  /// Check for app updates via GitHub repository releases or custom URL
+  /// Check for app updates via GitHub repository releases on iamcloner/v2raypro-android
   Future<UpdateInfo> checkAppUpdate({String? customUrl}) async {
     final client = _createHttpClient();
 
-    // 1. If custom URL provided, inspect it
-    if (customUrl != null && customUrl.trim().isNotEmpty) {
-      final trimmed = customUrl.trim();
-
-      // Direct zip download link
-      if (trimmed.toLowerCase().endsWith('.zip')) {
-        return UpdateInfo(
-          currentVersion: currentAppVersion,
-          latestVersion: currentAppVersion,
-          hasUpdate: true,
-          downloadUrl: trimmed,
-        );
+    // On Android, we strictly and exclusively check the Android repository releases
+    // and never query Windows releases.
+    final repo = "iamcloner/v2raypro-android";
+    try {
+      final reqLatest = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases/latest"));
+      reqLatest.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.0");
+      reqLatest.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
+      final resLatest = await reqLatest.close().timeout(const Duration(seconds: 10));
+      if (resLatest.statusCode == 200) {
+        final body = await resLatest.transform(utf8.decoder).join();
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        return _parseReleaseJson(json);
       }
 
-      // Check if it's a GitHub release tag URL (e.g. https://github.com/iamcloner/v2raypro/releases/tag/v1.2.0)
-      final tagMatch = RegExp(r'github\.com/([^/]+)/([^/]+)/releases/tag/([^/?#]+)').firstMatch(trimmed);
-      if (tagMatch != null) {
-        final owner = tagMatch.group(1);
-        final repo = tagMatch.group(2);
-        final tag = tagMatch.group(3);
-        try {
-          final req = await client.getUrl(Uri.parse("https://api.github.com/repos/$owner/$repo/releases/tags/$tag"));
-          req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Client/1.2.0");
-          req.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
-          final res = await req.close().timeout(const Duration(seconds: 10));
-          if (res.statusCode == 200) {
-            final body = await res.transform(utf8.decoder).join();
-            final json = jsonDecode(body) as Map<String, dynamic>;
-            return _parseReleaseJson(json, targetTag: tag);
-          }
-        } catch (e) {
-          debugPrint("checkAppUpdate tag URL check error: $e");
+      // Fallback to releases list
+      final req = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases?per_page=5"));
+      req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.0");
+      req.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
+      final res = await req.close().timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final body = await res.transform(utf8.decoder).join();
+        final list = jsonDecode(body) as List<dynamic>;
+        if (list.isNotEmpty) {
+          return _parseReleaseJson(list.first as Map<String, dynamic>);
         }
       }
-
-      // Check if it's a GitHub repo/releases URL (e.g. https://github.com/iamcloner/v2raypro/releases or https://github.com/iamcloner/v2raypro)
-      final repoMatch = RegExp(r'github\.com/([^/]+)/([^/?#]+)').firstMatch(trimmed);
-      if (repoMatch != null) {
-        final owner = repoMatch.group(1);
-        final repo = repoMatch.group(2);
-        try {
-          // Try /releases/latest first
-          final reqLatest = await client.getUrl(Uri.parse("https://api.github.com/repos/$owner/$repo/releases/latest"));
-          reqLatest.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Client/1.2.0");
-          reqLatest.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
-          final resLatest = await reqLatest.close().timeout(const Duration(seconds: 10));
-          if (resLatest.statusCode == 200) {
-            final body = await resLatest.transform(utf8.decoder).join();
-            final json = jsonDecode(body) as Map<String, dynamic>;
-            return _parseReleaseJson(json);
-          }
-
-          // Fallback to releases list
-          final req = await client.getUrl(Uri.parse("https://api.github.com/repos/$owner/$repo/releases?per_page=5"));
-          req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Client/1.2.0");
-          req.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
-          final res = await req.close().timeout(const Duration(seconds: 10));
-          if (res.statusCode == 200) {
-            final body = await res.transform(utf8.decoder).join();
-            final list = jsonDecode(body) as List<dynamic>;
-            if (list.isNotEmpty) {
-              return _parseReleaseJson(list.first as Map<String, dynamic>);
-            }
-          }
-        } catch (e) {
-          debugPrint("checkAppUpdate repo URL check error: $e");
-        }
-      }
-
-      // Custom JSON endpoint (e.g., version.json)
-      try {
-        final req = await client.getUrl(Uri.parse(trimmed));
-        req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Client/1.2.0");
-        final res = await req.close().timeout(const Duration(seconds: 10));
-        if (res.statusCode == 200) {
-          final body = await res.transform(utf8.decoder).join();
-          final json = jsonDecode(body) as Map<String, dynamic>;
-          final latest = (json["version"] as String? ?? currentAppVersion).trim();
-          final dlUrl = json["download_url"] as String?;
-          final notes = json["changelog"] as String?;
-          final hasUp = isVersionNewer(latest, currentAppVersion);
-          return UpdateInfo(
-            currentVersion: currentAppVersion,
-            latestVersion: latest,
-            hasUpdate: hasUp,
-            downloadUrl: dlUrl,
-            releaseNotes: notes,
-          );
-        }
-      } catch (e) {
-        debugPrint("checkAppUpdate custom JSON check: $e");
-      }
-    }
-
-    // 2. Default: Query GitHub API for latest release on iamcloner/v2raypro-android
-    final repos = [
-      "iamcloner/v2raypro-android",
-    ];
-
-    for (final repo in repos) {
-      try {
-        // First try /releases/latest
-        final reqLatest = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases/latest"));
-        reqLatest.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.0");
-        reqLatest.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
-        final resLatest = await reqLatest.close().timeout(const Duration(seconds: 10));
-        if (resLatest.statusCode == 200) {
-          final body = await resLatest.transform(utf8.decoder).join();
-          final json = jsonDecode(body) as Map<String, dynamic>;
-          return _parseReleaseJson(json);
-        }
-
-        // Fallback to releases list
-        final req = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases?per_page=5"));
-        req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.0");
-        req.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
-        final res = await req.close().timeout(const Duration(seconds: 10));
-        if (res.statusCode == 200) {
-          final body = await res.transform(utf8.decoder).join();
-          final list = jsonDecode(body) as List<dynamic>;
-          if (list.isNotEmpty) {
-            return _parseReleaseJson(list.first as Map<String, dynamic>);
-          }
-        }
-      } catch (e) {
-        debugPrint("checkAppUpdate github check ($repo): $e");
-      }
+    } catch (e) {
+      debugPrint("checkAppUpdate github check ($repo): $e");
     }
 
     return UpdateInfo(
@@ -602,11 +504,25 @@ class UpdateService {
     );
   }
 
-  /// Download latest release zip from GitHub, extract it, and apply updates to the application
+  /// Download latest release APK or open GitHub release page in browser
   Future<bool> downloadAndApplyAppUpdate(
     String downloadUrl, {
     void Function(String status, double progress)? onProgress,
   }) async {
+    final targetUrl = downloadUrl.trim().isNotEmpty
+        ? downloadUrl.trim()
+        : "https://github.com/iamcloner/v2raypro-android/releases";
+
+    if (Platform.isAndroid) {
+      try {
+        final uri = Uri.parse(targetUrl);
+        return await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (e) {
+        debugPrint("downloadAndApplyAppUpdate launchUrl error: $e");
+        return false;
+      }
+    }
+
     final client = _createHttpClient();
     try {
       final tempDir = await getTemporaryDirectory();
@@ -614,8 +530,7 @@ class UpdateService {
       final zipFile = File("${tempDir.path}\\v2raypro_release_$timestamp.zip");
       final extractDir = Directory("${tempDir.path}\\v2raypro_extracted_$timestamp");
 
-      // If URL is not direct zip, resolve it
-      String targetUrl = downloadUrl.trim();
+      String resolvedUrl = targetUrl;
       if (!targetUrl.toLowerCase().endsWith('.zip') && !targetUrl.contains('/download/')) {
         final resolved = await checkAppUpdate(customUrl: targetUrl);
         if (resolved.downloadUrl != null) {
