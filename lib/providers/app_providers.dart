@@ -221,7 +221,7 @@ final isSystemProxyEnabledProvider = StateNotifierProvider<SystemProxyNotifier, 
 });
 
 class TunNotifier extends StateNotifier<bool> {
-  TunNotifier() : super(false) {
+  TunNotifier() : super(Platform.isAndroid ? true : false) {
     _init();
   }
 

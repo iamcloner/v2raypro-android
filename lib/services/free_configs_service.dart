@@ -192,28 +192,26 @@ class FreeConfigsService {
         targetWorking: targetWorking,
       ));
 
-      // 6. Test all unique nodes with 10 concurrent workers (streaming updates on each node)
-      int currentIndex = 0;
+      // 6. Test all unique nodes in chunked batches using ephemeral multi-inbound Xray process
+      const int batchSize = 6;
       int testedCount = 0;
       final testStartTime = DateTime.now();
 
-      Future<void> runWorker() async {
-        while (currentIndex < uniqueNodes.length && !_isCancelled) {
-          final nodeIndex = currentIndex++;
-          if (nodeIndex >= uniqueNodes.length) break;
-          final node = uniqueNodes[nodeIndex];
+      for (int i = 0; i < uniqueNodes.length; i += batchSize) {
+        if (_isCancelled) break;
+        final end = min(i + batchSize, uniqueNodes.length);
+        final chunk = uniqueNodes.sublist(i, end);
 
-          final isTurbo = testMode != null && testMode.toString().contains('turbo');
-          final res = await XrayProcessService.instance.testNodeRealDelay(
-            node,
-            timeout: const Duration(milliseconds: 2800),
-            isTurbo: isTurbo,
-          );
-          if (_isCancelled) break;
+        final resMap = await XrayProcessService.instance.testNodesBatchRealProxy(
+          chunk,
+          timeout: const Duration(milliseconds: 3200),
+        );
+        if (_isCancelled) break;
 
+        for (final node in chunk) {
           testedCount++;
-
-          if (res.isSuccess) {
+          final res = resMap[node.id];
+          if (res != null && res.isSuccess) {
             final cCode = res.countryCode ?? node.countryCode ?? CountryService.resolveSync(node);
             final cName = res.country ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country);
             final testedNode = node.copyWith(
@@ -224,7 +222,6 @@ class FreeConfigsService {
             );
             workingNodes.add(testedNode);
             workingNodes.sort((a, b) => a.latencyMs!.compareTo(b.latencyMs!));
-            // Immediate persistence of discovered working nodes
             StorageService.instance.saveFreeConfigs(workingNodes);
           } else {
             final deadNode = node.copyWith(
@@ -233,36 +230,31 @@ class FreeConfigsService {
             );
             timeoutNodes.add(deadNode);
           }
-
-          String? etaStr;
-          if (totalUnique > 50 && testedCount > 0 && testedCount < totalUnique) {
-            final elapsed = DateTime.now().difference(testStartTime);
-            final avgPerNode = elapsed.inMilliseconds / testedCount;
-            final remainingMs = (avgPerNode * (totalUnique - testedCount)).round();
-            final remSeconds = (remainingMs / 1000).round();
-            final minutes = remSeconds ~/ 60;
-            final seconds = remSeconds % 60;
-            etaStr = '~${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-          }
-
-          // Trigger onProgress immediately for every single node tested
-          onProgress?.call(FreeConfigsScanProgress(
-            totalScraped: totalScraped,
-            totalUnique: totalUnique,
-            testedCandidates: testedCount,
-            workingFound: workingNodes.length,
-            status: testedCount >= totalUnique ? 'completed' : 'testing',
-            workingNodes: List.unmodifiable(workingNodes),
-            timeoutNodes: List.unmodifiable(timeoutNodes),
-            isCompleted: testedCount >= totalUnique,
-            estimatedRemainingTime: etaStr,
-          ));
         }
-      }
 
-      final workerCount = min(concurrency, uniqueNodes.length);
-      final workers = List.generate(workerCount, (_) => runWorker());
-      await Future.wait(workers);
+        String? etaStr;
+        if (totalUnique > 10 && testedCount > 0 && testedCount < totalUnique) {
+          final elapsed = DateTime.now().difference(testStartTime);
+          final avgPerNode = elapsed.inMilliseconds / testedCount;
+          final remainingMs = (avgPerNode * (totalUnique - testedCount)).round();
+          final remSeconds = (remainingMs / 1000).round();
+          final minutes = remSeconds ~/ 60;
+          final seconds = remSeconds % 60;
+          etaStr = '~${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+        }
+
+        onProgress?.call(FreeConfigsScanProgress(
+          totalScraped: totalScraped,
+          totalUnique: totalUnique,
+          testedCandidates: testedCount,
+          workingFound: workingNodes.length,
+          status: testedCount >= totalUnique ? 'completed' : 'testing',
+          workingNodes: List.unmodifiable(workingNodes),
+          timeoutNodes: List.unmodifiable(timeoutNodes),
+          isCompleted: testedCount >= totalUnique,
+          estimatedRemainingTime: etaStr,
+        ));
+      }
 
       if (_isCancelled) return workingNodes;
 

@@ -206,7 +206,7 @@ class StorageService {
   Future<bool> loadSystemProxyEnabled() => loadBool(_sysProxyKey, defaultValue: false);
 
   Future<void> saveTunEnabled(bool val) => saveBool(_tunKey, val);
-  Future<bool> loadTunEnabled() => loadBool(_tunKey, defaultValue: false);
+  Future<bool> loadTunEnabled() => loadBool(_tunKey, defaultValue: Platform.isAndroid ? true : false);
 
   Future<void> saveGlobalAllowInsecure(bool val) => saveBool(_allowInsecureKey, val);
   Future<bool> loadGlobalAllowInsecure() => loadBool(_allowInsecureKey, defaultValue: false);

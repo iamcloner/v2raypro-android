@@ -1013,6 +1013,26 @@ class XrayProcessService {
     final outbounds = <Map<String, dynamic>>[];
     final rules = <Map<String, dynamic>>[];
 
+    // Pre-resolve all host addresses so Xray never hangs on UDP 53 DNS in Iran
+    final hostsMap = <String, dynamic>{
+      'cp.cloudflare.com': ['104.16.132.229', '104.16.133.229'],
+      'www.gstatic.com': ['142.250.180.3'],
+      'www.google.com': ['142.250.180.4'],
+    };
+
+    await Future.wait(validNodes.map((n) async {
+      final addr = n.address.trim();
+      final isIp = RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(addr) || addr.contains(':');
+      if (!isIp && addr.isNotEmpty) {
+        try {
+          final ips = await InternetAddress.lookup(addr).timeout(const Duration(milliseconds: 1200));
+          if (ips.isNotEmpty) {
+            hostsMap[addr] = ips.map((e) => e.address).toList();
+          }
+        } catch (_) {}
+      }
+    }));
+
     for (int i = 0; i < validNodes.length; i++) {
       final port = basePort + i;
       final inTag = 'in_$i';
@@ -1037,24 +1057,18 @@ class XrayProcessService {
       });
     }
 
-    outbounds.add({'tag': 'dns-out', 'protocol': 'dns'});
     outbounds.add({'tag': 'direct', 'protocol': 'freedom'});
-    rules.add({'type': 'field', 'port': 53, 'outboundTag': 'dns-out'});
 
     final testConfig = {
       'log': {'loglevel': 'none'},
       'dns': {
-        'hosts': {
-          'cp.cloudflare.com': ['104.16.132.229', '104.16.133.229'],
-          'www.gstatic.com': ['142.250.180.3'],
-          'www.google.com': ['142.250.180.4']
-        },
-        'servers': ['localhost', 'https://1.1.1.1/dns-query']
+        'hosts': hostsMap,
+        'servers': ['1.1.1.1', '8.8.8.8']
       },
       'inbounds': inbounds,
       'outbounds': outbounds,
       'routing': {
-        'domainStrategy': 'IPIfNonMatch',
+        'domainStrategy': 'AsIs',
         'rules': rules,
       }
     };
@@ -1062,7 +1076,7 @@ class XrayProcessService {
     final tempDir = Platform.isAndroid && _androidAssetDir != null
         ? _androidAssetDir!
         : Directory.systemTemp;
-    final tempFile = File('${tempDir.path}/xray_batch_test_${DateTime.now().millisecondsSinceEpoch}.json');
+    final tempFile = File('${tempDir.path}/xray_batch_test_${DateTime.now().microsecondsSinceEpoch}_${(DateTime.now().millisecondsSinceEpoch % 100000)}.json');
     Process? proc;
     try {
       await tempFile.writeAsString(jsonEncode(testConfig));
@@ -1074,17 +1088,21 @@ class XrayProcessService {
         environment: _getXrayEnvironment(),
       );
 
-      // Actively poll until Xray binds to basePort (up to 2500ms)
+      // Drain stdout and stderr to prevent pipe buffer deadlock
+      proc.stdout.drain().catchError((_) {});
+      proc.stderr.drain().catchError((_) {});
+
+      // Actively poll until Xray binds to basePort (up to 2000ms)
       bool isReady = false;
       final readySw = Stopwatch()..start();
-      while (readySw.elapsedMilliseconds < 2500) {
+      while (readySw.elapsedMilliseconds < 2000) {
         try {
-          final s = await Socket.connect('127.0.0.1', basePort, timeout: const Duration(milliseconds: 100));
+          final s = await Socket.connect('127.0.0.1', basePort, timeout: const Duration(milliseconds: 80));
           s.destroy();
           isReady = true;
           break;
         } catch (_) {
-          await Future.delayed(const Duration(milliseconds: 50));
+          await Future.delayed(const Duration(milliseconds: 30));
         }
       }
       if (!isReady) {
@@ -1100,41 +1118,42 @@ class XrayProcessService {
         client.findProxy = (uri) => 'PROXY 127.0.0.1:$port';
         client.connectionTimeout = timeout;
 
-        // 1. Primary: Ping google.com:443 3 times and select the lowest ping
-        final lowestPing = await pingGoogleViaProxy(client, count: 3, timeout: timeout);
+        int? testPing;
+        String? cCode;
+        String? cName;
+        String? exitIp;
 
-        if (lowestPing != null) {
-          String? cCode;
-          String? cName;
-          String? exitIp;
-
-          // Attempt fast trace to discover exit IP and country
-          try {
-            final r = await client.getUrl(Uri.parse('http://cp.cloudflare.com/cdn-cgi/trace')).timeout(timeout);
-            final resp = await r.close().timeout(timeout);
-            if (resp.statusCode == 200) {
-              final body = await resp.transform(utf8.decoder).join().timeout(timeout);
-              final trace = NodeTestResult.parseCloudflareTrace(body);
-              if (trace.loc != null && trace.loc!.isNotEmpty && trace.loc != 'XX') {
-                cCode = trace.loc;
-              }
-              exitIp = trace.ip;
-              if (cCode == null && exitIp != null) {
-                cCode = LocalGeoIp.instance.lookup(exitIp);
-              }
-              if (cCode != null) {
-                cName = CountryService.getCountryName(cCode);
-              }
+        // 1. Primary: Measure true HTTP real delay via Cloudflare cdn-cgi/trace
+        // Returns status 200, real delay ~600ms, and loc=XX country code in one single request!
+        try {
+          final sw = Stopwatch()..start();
+          final r = await client.getUrl(Uri.parse('http://cp.cloudflare.com/cdn-cgi/trace')).timeout(timeout);
+          final resp = await r.close().timeout(timeout);
+          if (resp.statusCode == 200) {
+            final body = await resp.transform(utf8.decoder).join().timeout(const Duration(milliseconds: 600));
+            sw.stop();
+            testPing = sw.elapsedMilliseconds;
+            final trace = NodeTestResult.parseCloudflareTrace(body);
+            if (trace.loc != null && trace.loc!.isNotEmpty && trace.loc != 'XX') {
+              cCode = trace.loc;
             }
-          } catch (_) {}
+            exitIp = trace.ip;
+          }
+        } catch (_) {}
 
+        // 2. Fallback: If cdn-cgi/trace failed, probe generate_204 to get genuine latency
+        if (testPing == null) {
+          testPing = await pingGoogleViaProxy(client, count: 1, timeout: timeout);
+        }
+
+        if (testPing != null && testPing > 0) {
           if (cCode == null && exitIp != null) {
             cCode = LocalGeoIp.instance.lookup(exitIp);
           }
           final resolvedCode = cCode ?? node.countryCode ?? await CountryService.instance.resolveCountryCode(node);
-          final resolvedName = cName ?? (resolvedCode != null ? CountryService.getCountryName(resolvedCode) : node.country);
+          final resolvedName = (resolvedCode != null ? CountryService.getCountryName(resolvedCode) : null) ?? cName ?? node.country;
           results[node.id] = NodeTestResult(
-            latencyMs: lowestPing,
+            latencyMs: testPing,
             countryCode: resolvedCode,
             country: resolvedName,
             exitIp: exitIp,

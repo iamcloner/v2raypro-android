@@ -9,7 +9,6 @@ import 'core/l10n/translations.dart';
 import 'core/theme/app_theme.dart';
 import 'models/proxy_node.dart';
 import 'providers/app_providers.dart';
-import 'services/cloudflare_scanner_service.dart';
 import 'services/xray_process_service.dart';
 import 'utils/config_parser.dart';
 import 'utils/ip_mask_util.dart';
@@ -168,54 +167,83 @@ class _ConfigsViewState extends ConsumerState<ConfigsView> {
 
     ref.read(nodesProvider.notifier).clearLatencies(onlyCustom: true);
 
-    int currentIndex = 0;
-    final concurrency = ref.read(testConcurrencyProvider);
-    final testMode = ref.read(testModeProvider);
-    final isTurbo = testMode == TestMode.turbo;
+    const int batchSize = 6;
     final testStartTime = DateTime.now();
+    final allNodes = ref.read(nodesProvider);
+    final activeNode = allNodes.where((n) => n.isActive).firstOrNull;
+    final connState = ref.read(connectionStatusProvider);
+    final isConnected = connState == ConnectionStateEnum.connected;
 
-    Future<void> runWorker() async {
-      while (currentIndex < nodes.length && !_cancelTestingAll && mounted) {
-        final nodeIndex = currentIndex++;
-        if (nodeIndex >= nodes.length) break;
-        final n = nodes[nodeIndex];
+    for (int i = 0; i < nodes.length; i += batchSize) {
+      if (_cancelTestingAll || !mounted) break;
 
-        final res = await XrayProcessService.instance.testNodeRealDelay(
-          n,
-          isTurbo: isTurbo,
-        );
-        if (_cancelTestingAll || !mounted) break;
+      final end = math.min(i + batchSize, nodes.length);
+      final chunk = nodes.sublist(i, end);
 
-        if (mounted) {
-          ref.read(nodesProvider.notifier).updateLatency(
-            n.id,
-            res.latencyMs,
-            countryCode: res.countryCode ?? n.countryCode ?? CountryService.resolveSync(n),
-            country: res.country ?? (res.countryCode != null ? CountryService.getCountryName(res.countryCode!) : n.country),
-          );
-          final tested = _testedCount + 1;
-          String? eta;
-          if (nodes.length > 50 && tested > 0 && tested < nodes.length) {
-            final elapsed = DateTime.now().difference(testStartTime);
-            final avgPerNode = elapsed.inMilliseconds / tested;
-            final remainingMs = (avgPerNode * (nodes.length - tested)).round();
-            final remSeconds = (remainingMs / 1000).round();
-            final minutes = remSeconds ~/ 60;
-            final seconds = remSeconds % 60;
-            eta = '~${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-          }
-          setState(() {
-            _testingNodeIds.remove(n.id);
-            _testedCount = tested;
-            _testRemainingEta = eta;
-          });
+      final Map<String, NodeTestResult> batchResults = {};
+      final nodesForBatch = <ProxyNode>[];
+
+      for (final n in chunk) {
+        if (isConnected && (n.isActive || (activeNode != null && n.id == activeNode.id))) {
+          final res = await XrayProcessService.instance.testNodeRealDelay(n);
+          batchResults[n.id] = res;
+        } else {
+          nodesForBatch.add(n);
         }
       }
-    }
 
-    final workerCount = math.min(concurrency, nodes.length);
-    final workers = List.generate(workerCount, (_) => runWorker());
-    await Future.wait(workers);
+      if (nodesForBatch.isNotEmpty) {
+        final resMap = await XrayProcessService.instance.testNodesBatchRealProxy(nodesForBatch);
+        if (resMap.isNotEmpty) {
+          batchResults.addAll(resMap);
+        } else {
+          // Fallback if batch runner returned empty
+          for (final n in nodesForBatch) {
+            if (_cancelTestingAll || !mounted) break;
+            final res = await XrayProcessService.instance.testNodeRealDelay(n);
+            batchResults[n.id] = res;
+          }
+        }
+      }
+
+      if (_cancelTestingAll || !mounted) break;
+
+      for (final n in chunk) {
+        final res = batchResults[n.id];
+        final lat = (res != null && res.isSuccess) ? res.latencyMs : -1;
+        final cCode = res?.countryCode ?? n.countryCode ?? CountryService.resolveSync(n);
+        final cName = res?.country ?? (cCode != null ? CountryService.getCountryName(cCode) : n.country);
+
+        ref.read(nodesProvider.notifier).updateLatency(
+          n.id,
+          lat,
+          countryCode: cCode,
+          country: cName,
+        );
+      }
+
+      final tested = math.min(i + chunk.length, nodes.length);
+      String? eta;
+      if (nodes.length > 10 && tested > 0 && tested < nodes.length) {
+        final elapsed = DateTime.now().difference(testStartTime);
+        final avgPerNode = elapsed.inMilliseconds / tested;
+        final remainingMs = (avgPerNode * (nodes.length - tested)).round();
+        final remSeconds = (remainingMs / 1000).round();
+        final minutes = remSeconds ~/ 60;
+        final seconds = remSeconds % 60;
+        eta = '~${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+      }
+
+      if (mounted) {
+        setState(() {
+          for (final n in chunk) {
+            _testingNodeIds.remove(n.id);
+          }
+          _testedCount = tested;
+          _testRemainingEta = eta;
+        });
+      }
+    }
 
     if (mounted) {
       setState(() {
