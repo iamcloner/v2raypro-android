@@ -509,7 +509,7 @@ class UpdateService {
     String downloadUrl, {
     void Function(String status, double progress)? onProgress,
   }) async {
-    final targetUrl = downloadUrl.trim().isNotEmpty
+    String targetUrl = downloadUrl.trim().isNotEmpty
         ? downloadUrl.trim()
         : "https://github.com/iamcloner/v2raypro-android/releases";
 
@@ -530,7 +530,6 @@ class UpdateService {
       final zipFile = File("${tempDir.path}\\v2raypro_release_$timestamp.zip");
       final extractDir = Directory("${tempDir.path}\\v2raypro_extracted_$timestamp");
 
-      String resolvedUrl = targetUrl;
       if (!targetUrl.toLowerCase().endsWith('.zip') && !targetUrl.contains('/download/')) {
         final resolved = await checkAppUpdate(customUrl: targetUrl);
         if (resolved.downloadUrl != null) {
