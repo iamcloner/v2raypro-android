@@ -279,8 +279,9 @@ Future<RealDelayResult> testRealDelay({
 Future<RealDelayResult> _executeRealDelay(
   ProxyNode node,
   Duration effectiveTimeout,
-  bool isTurbo,
-) async {
+  bool isTurbo, {
+  bool skipBatchProxy = false,
+}) async {
   // If node is currently connected, test via active local proxy
   final isRunningLocally = XrayProcessService.instance.state == EngineState.running ||
       (Platform.isAndroid && await XrayProcessService.instance.isAndroidVpnRunning());
@@ -301,13 +302,9 @@ Future<RealDelayResult> _executeRealDelay(
     );
   }
 
-  // Pre-connection Real Delay via Ephemeral Multi-inbound Process
-  // (Works for both xray and singbox configs converted to unified ProxyNode)
-  if (Platform.isAndroid && XrayProcessService.instance.androidBinaryPath == null) {
-    await XrayProcessService.instance.initAndroid();
-  }
-
-  if (XrayProcessService.instance.isNodeConfigSupported(node)) {
+  // Pre-connection Real Delay via Ephemeral Multi-inbound Process (Desktop only)
+  // On Android, background child processes cannot be spawned via Process.start, so skip directly to fast authentic protocol probe
+  if (!Platform.isAndroid && !skipBatchProxy && XrayProcessService.instance.isNodeConfigSupported(node)) {
     try {
       final batchMap = await XrayProcessService.instance.testNodesBatchRealProxy(
         [node],
@@ -337,8 +334,12 @@ Future<RealDelayResult> _executeRealDelay(
     } catch (_) {}
   }
 
-  // Fallback: Direct protocol probe
-  final handshakeLat = await XrayProcessService.instance.testNodeLatency(node, timeout: effectiveTimeout);
+  // Direct authentic protocol probe (TCP/TLS handshake + transport verification)
+  final handshakeLat = await XrayProcessService.instance.testNodeProtocolDelay(
+    node,
+    timeout: effectiveTimeout,
+    count: isTurbo ? 1 : 2,
+  );
   if (handshakeLat != null && handshakeLat > 0) {
     final cCode = (node.countryCode ?? await CountryService.instance.resolveCountryCode(node))?.toLowerCase();
     final cName = cCode != null ? CountryService.getCountryName(cCode.toUpperCase()) : node.country;
@@ -463,13 +464,20 @@ Future<Map<String, RealDelayResult>> testRealDelayBatch({
 
   final isTurbo = mode.toLowerCase() == 'turbo';
   final effectiveTimeout = timeout ?? (isTurbo ? const Duration(milliseconds: 2200) : const Duration(milliseconds: 3500));
-
-  final resMap = await XrayProcessService.instance.testNodesBatchRealProxy(nodes, timeout: effectiveTimeout);
   final results = <String, RealDelayResult>{};
 
+  // On desktop, attempt batch proxy test once
+  Map<String, NodeTestResult> resMap = {};
+  if (!Platform.isAndroid) {
+    try {
+      resMap = await XrayProcessService.instance.testNodesBatchRealProxy(nodes, timeout: effectiveTimeout);
+    } catch (_) {}
+  }
+
+  // Identify nodes that need direct protocol testing
+  final unresolvedNodes = <ProxyNode>[];
   for (final n in nodes) {
     final r = resMap[n.id];
-    RealDelayResult singleRes;
     if (r != null && r.isSuccess) {
       String? ipv4;
       String? ipv6;
@@ -479,7 +487,7 @@ Future<Map<String, RealDelayResult>> testRealDelayBatch({
         if (exitIp.contains(':')) ipv6 = exitIp;
       }
       final cCode = (r.countryCode ?? n.countryCode)?.toLowerCase();
-      singleRes = RealDelayResult(
+      final singleRes = RealDelayResult(
         ping: r.latencyMs,
         country: cCode,
         ipv4: ipv4,
@@ -487,12 +495,29 @@ Future<Map<String, RealDelayResult>> testRealDelayBatch({
         countryName: r.country ?? (cCode != null ? CountryService.getCountryName(cCode.toUpperCase()) : n.country),
       );
       _logRealDelayResult(n, singleRes);
+      results[n.id] = singleRes;
     } else {
-      singleRes = await _executeRealDelay(n, effectiveTimeout, isTurbo);
-      _logRealDelayResult(n, singleRes);
+      unresolvedNodes.add(n);
     }
-    results[n.id] = singleRes;
   }
+
+  // Test unresolved nodes concurrently in parallel chunks of 10
+  if (unresolvedNodes.isNotEmpty) {
+    const int chunkSize = 10;
+    for (int i = 0; i < unresolvedNodes.length; i += chunkSize) {
+      final end = math.min(i + chunkSize, unresolvedNodes.length);
+      final chunk = unresolvedNodes.sublist(i, end);
+      final chunkResults = await Future.wait(chunk.map((n) async {
+        final singleRes = await _executeRealDelay(n, effectiveTimeout, isTurbo, skipBatchProxy: true);
+        _logRealDelayResult(n, singleRes);
+        return MapEntry(n.id, singleRes);
+      }));
+      for (final entry in chunkResults) {
+        results[entry.key] = entry.value;
+      }
+    }
+  }
+
   return results;
 }
 

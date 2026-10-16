@@ -2248,6 +2248,101 @@ class FreeConfigsNotifier extends StateNotifier<FreeConfigsState> {
     state = state.copyWith(isScanning: false, status: 'completed', estimatedRemainingTime: null);
   }
 
+  void updateSingleNode(ProxyNode updatedNode) {
+    final currentWorking = List<ProxyNode>.from(state.workingNodes);
+    final currentTimeout = List<ProxyNode>.from(state.timeoutNodes);
+
+    currentWorking.removeWhere((n) => n.id == updatedNode.id);
+    currentTimeout.removeWhere((n) => n.id == updatedNode.id);
+
+    if (updatedNode.hasValidPing) {
+      currentWorking.add(updatedNode);
+      currentWorking.sort((a, b) => (a.latencyMs ?? 99999).compareTo(b.latencyMs ?? 99999));
+    } else {
+      currentTimeout.add(updatedNode);
+    }
+
+    state = state.copyWith(
+      workingNodes: List.unmodifiable(currentWorking),
+      timeoutNodes: List.unmodifiable(currentTimeout),
+    );
+
+    if (currentWorking.isNotEmpty) {
+      StorageService.instance.saveFreeConfigs(currentWorking);
+    }
+  }
+
+  Future<void> testAllFreeNodes() async {
+    if (state.isScanning) return;
+    final all = [...state.workingNodes, ...state.timeoutNodes];
+    if (all.isEmpty) return;
+
+    state = state.copyWith(
+      isScanning: true,
+      status: 'testing',
+      progress: 0.0,
+      totalUnique: all.length,
+      testedCandidates: 0,
+    );
+
+    final testMode = ref.read(testModeProvider);
+    final modeStr = testMode == TestMode.turbo ? 'turbo' : 'normal';
+
+    const int batchSize = 10;
+    final working = <ProxyNode>[];
+    final timeouts = <ProxyNode>[];
+    int tested = 0;
+
+    for (int i = 0; i < all.length; i += batchSize) {
+      final end = min(i + batchSize, all.length);
+      final chunk = all.sublist(i, end);
+
+      final resMap = await testRealDelayBatch(
+        mode: modeStr,
+        type: 'xray',
+        configs: chunk.map((n) => n.toJson()).toList(),
+      );
+
+      for (final n in chunk) {
+        tested++;
+        final res = resMap[n.id];
+        if (res != null && res.isSuccess) {
+          final cCode = res.country?.toUpperCase() ?? n.countryCode ?? CountryService.resolveSync(n);
+          final cName = res.countryName ?? (cCode != null ? CountryService.getCountryName(cCode) : n.country);
+          working.add(n.copyWith(
+            latencyMs: res.ping,
+            countryCode: cCode,
+            country: cName,
+            lastTestedAt: DateTime.now(),
+          ));
+        } else {
+          timeouts.add(n.copyWith(
+            latencyMs: -1,
+            lastTestedAt: DateTime.now(),
+          ));
+        }
+      }
+
+      working.sort((a, b) => (a.latencyMs ?? 99999).compareTo(b.latencyMs ?? 99999));
+
+      state = state.copyWith(
+        workingNodes: List.unmodifiable(working),
+        timeoutNodes: List.unmodifiable(timeouts),
+        testedCandidates: tested,
+        progress: (tested / all.length).clamp(0.0, 1.0),
+      );
+    }
+
+    if (working.isNotEmpty) {
+      await StorageService.instance.saveFreeConfigs(working);
+    }
+
+    state = state.copyWith(
+      isScanning: false,
+      status: 'completed',
+    );
+  }
+
   void cancelScan() {
     FreeConfigsService.instance.cancel();
     state = state.copyWith(isScanning: false, status: 'cancelled', estimatedRemainingTime: null);

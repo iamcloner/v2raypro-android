@@ -1331,11 +1331,9 @@ class XrayProcessService {
     }
 
     // 2. Pre-connection Real Delay testing (Matching v2rayN and v2rayNG):
-    // When Xray core is present, spin up an ephemeral test instance to route authentic generate_204 through proxy
-    if (Platform.isAndroid && _androidBinaryPath == null) {
-      await initAndroid();
-    }
-    if (_findXrayBinary() != null && isNodeConfigSupported(node)) {
+    // When Xray core is present on desktop, spin up an ephemeral test instance to route authentic generate_204 through proxy.
+    // On Android, background child processes cannot be spawned via Process.start, so skip directly to fast authentic protocol probe.
+    if (!Platform.isAndroid && _findXrayBinary() != null && isNodeConfigSupported(node)) {
       try {
         final batchResults = await testNodesBatchRealProxy([node], timeout: timeout);
         final res = batchResults[node.id];
@@ -1351,7 +1349,7 @@ class XrayProcessService {
       } catch (_) {}
     }
 
-    // 3. Fallback: Direct protocol probe
+    // 3. Fast authentic protocol probe
     final handshakeLat = await _testNodeRealProtocolDelay(node, timeout: timeout, count: 2);
     if (handshakeLat != null && handshakeLat > 0) {
       final cCode = node.countryCode ?? await CountryService.instance.resolveCountryCode(node);
@@ -1364,6 +1362,13 @@ class XrayProcessService {
 
     return const NodeTestResult(latencyMs: null);
   }
+
+  /// Direct authentic protocol probe (TCP/TLS handshake + protocol verification)
+  Future<int?> testNodeProtocolDelay(
+    ProxyNode node, {
+    Duration timeout = const Duration(milliseconds: 2500),
+    int count = 2,
+  }) => _testNodeRealProtocolDelay(node, timeout: timeout, count: count);
 
   /// Backward-compatible latency tester returning milliseconds
   Future<int?> testNodeLatency(ProxyNode node, {Duration timeout = const Duration(seconds: 4)}) async {
@@ -1564,7 +1569,9 @@ class XrayProcessService {
                   !isCdnError;
 
               if (isAcceptableStatus) {
-                final latency = sw.elapsedMilliseconds > 0 ? sw.elapsedMilliseconds : handshakeLatency;
+                // Handshake latency represents authentic network RTT (TCP + TLS).
+                // Avoid stacking HTTP upgrade request/response turnaround or CDN server queuing delay.
+                final latency = handshakeLatency > 0 ? handshakeLatency : sw.elapsedMilliseconds;
                 completer.complete(latency);
               } else {
                 completer.complete(null);
@@ -1598,7 +1605,7 @@ class XrayProcessService {
           (data) {
             sw.stop();
             if (!completer.isCompleted) {
-              final latency = sw.elapsedMilliseconds > 0 ? sw.elapsedMilliseconds : handshakeLatency;
+              final latency = handshakeLatency > 0 ? handshakeLatency : sw.elapsedMilliseconds;
               completer.complete(latency);
             }
           },

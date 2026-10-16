@@ -168,7 +168,7 @@ class _ConfigsViewState extends ConsumerState<ConfigsView> {
 
     ref.read(nodesProvider.notifier).clearLatencies(onlyCustom: true);
 
-    const int batchSize = 6;
+    const int batchSize = 10;
     final testStartTime = DateTime.now();
     final allNodes = ref.read(nodesProvider);
     final activeNode = allNodes.where((n) => n.isActive).firstOrNull;

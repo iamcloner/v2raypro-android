@@ -194,7 +194,7 @@ class FreeConfigsService {
       ));
 
       // 6. Test all unique nodes in chunked batches using ephemeral multi-inbound Xray process
-      const int batchSize = 6;
+      const int batchSize = 10;
       int testedCount = 0;
       final testStartTime = DateTime.now();
 

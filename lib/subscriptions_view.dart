@@ -332,7 +332,7 @@ class _SubscriptionsViewState extends ConsumerState<SubscriptionsView> {
 
     ref.read(nodesProvider.notifier).clearLatencies(subscriptionId: subId);
 
-    const int batchSize = 6;
+    const int batchSize = 10;
     final testStartTime = DateTime.now();
     final allNodes = ref.read(nodesProvider);
     final activeNode = allNodes.where((n) => n.isActive).firstOrNull;
@@ -1103,13 +1103,13 @@ class _SubscriptionsViewState extends ConsumerState<SubscriptionsView> {
                                                       }
                                                     },
                                                     itemBuilder: (ctx) => [
-                                                      const PopupMenuItem(
+                                                      PopupMenuItem(
                                                         value: 'ping',
                                                         child: Row(
                                                           children: [
-                                                            Icon(Icons.bolt_rounded, size: 18, color: Colors.cyanAccent),
-                                                            SizedBox(width: 8),
-                                                            Text('Ping test'),
+                                                            const Icon(Icons.bolt_rounded, size: 18, color: Colors.cyanAccent),
+                                                            const SizedBox(width: 8),
+                                                            Text(AppStrings.get('retest_ping', locale: locale)),
                                                           ],
                                                         ),
                                                       ),
@@ -1183,44 +1183,61 @@ class _SubscriptionsViewState extends ConsumerState<SubscriptionsView> {
                                                       const SizedBox(width: 5),
                                                     ],
                                                     if (node.hasValidPing)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                                        decoration: BoxDecoration(
-                                                          color: AppTheme.successColor.withValues(alpha: 0.15),
-                                                          borderRadius: BorderRadius.circular(4),
-                                                          border: Border.all(color: AppTheme.successColor.withValues(alpha: 0.3), width: 0.8),
-                                                        ),
-                                                        child: Text(
-                                                          "${node.latencyMs} ms",
-                                                          style: const TextStyle(
-                                                            color: AppTheme.successColor,
-                                                            fontSize: 10.5,
-                                                            fontWeight: FontWeight.bold,
+                                                      InkWell(
+                                                        onTap: () => _testNodeLatency(node),
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        child: Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: AppTheme.successColor.withValues(alpha: 0.15),
+                                                            borderRadius: BorderRadius.circular(4),
+                                                            border: Border.all(color: AppTheme.successColor.withValues(alpha: 0.3), width: 0.8),
+                                                          ),
+                                                          child: Text(
+                                                            "${node.latencyMs} ms",
+                                                            style: const TextStyle(
+                                                              color: AppTheme.successColor,
+                                                              fontSize: 10.5,
+                                                              fontWeight: FontWeight.bold,
+                                                            ),
                                                           ),
                                                         ),
                                                       )
                                                     else if (node.hasTimedOut)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                                        decoration: BoxDecoration(
-                                                          color: AppTheme.errorColor.withValues(alpha: 0.15),
-                                                          borderRadius: BorderRadius.circular(4),
-                                                          border: Border.all(color: AppTheme.errorColor.withValues(alpha: 0.4), width: 0.8),
-                                                        ),
-                                                        child: Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const Icon(Icons.cloud_off_rounded, size: 10, color: AppTheme.errorColor),
-                                                            const SizedBox(width: 3),
-                                                            Text(
-                                                              AppStrings.get("timeout", locale: locale),
-                                                              style: const TextStyle(
-                                                                color: AppTheme.errorColor,
-                                                                fontSize: 9.5,
-                                                                fontWeight: FontWeight.bold,
+                                                      InkWell(
+                                                        onTap: () => _testNodeLatency(node),
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        child: Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: AppTheme.errorColor.withValues(alpha: 0.15),
+                                                            borderRadius: BorderRadius.circular(4),
+                                                            border: Border.all(color: AppTheme.errorColor.withValues(alpha: 0.4), width: 0.8),
+                                                          ),
+                                                          child: Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              const Icon(Icons.cloud_off_rounded, size: 10, color: AppTheme.errorColor),
+                                                              const SizedBox(width: 3),
+                                                              Text(
+                                                                AppStrings.get("timeout", locale: locale),
+                                                                style: const TextStyle(
+                                                                  color: AppTheme.errorColor,
+                                                                  fontSize: 9.5,
+                                                                  fontWeight: FontWeight.bold,
+                                                                ),
                                                               ),
-                                                            ),
-                                                          ],
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      )
+                                                    else
+                                                      InkWell(
+                                                        onTap: () => _testNodeLatency(node),
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        child: const Padding(
+                                                          padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                                          child: Icon(Icons.bolt_rounded, size: 16, color: Colors.cyanAccent),
                                                         ),
                                                       ),
                                                   ],

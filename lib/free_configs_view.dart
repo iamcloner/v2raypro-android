@@ -8,6 +8,7 @@ import 'core/theme/app_theme.dart';
 import 'models/proxy_node.dart';
 import 'providers/app_providers.dart';
 import 'services/country_service.dart';
+import 'services/real_delay_service.dart';
 import 'utils/ip_mask_util.dart';
 import 'widgets/country_flag_badge.dart';
 import 'widgets/country_filter_bar.dart';
@@ -22,6 +23,7 @@ class FreeConfigsView extends ConsumerStatefulWidget {
 
 class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
   final TextEditingController _searchController = TextEditingController();
+  final Set<String> _testingNodeIds = {};
   String _searchFilter = '';
   String? _selectedCountryCode;
   bool _isSearchExpanded = false;
@@ -53,6 +55,36 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
     } else {
       ref.read(nodesProvider.notifier).selectAndConnectFreeNode(node);
       await ref.read(connectionStatusProvider.notifier).connect(node);
+    }
+  }
+
+  Future<void> _testFreeNodeLatency(ProxyNode node) async {
+    if (_testingNodeIds.contains(node.id)) return;
+    setState(() => _testingNodeIds.add(node.id));
+
+    try {
+      final testMode = ref.read(testModeProvider);
+      final res = await testRealDelay(
+        mode: testMode == TestMode.turbo ? 'turbo' : 'normal',
+        type: 'xray',
+        config: node.toJson(),
+      );
+
+      final cCode = res.country?.toUpperCase() ?? node.countryCode ?? CountryService.resolveSync(node);
+      final cName = res.countryName ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country);
+
+      final updatedNode = node.copyWith(
+        latencyMs: res.ping ?? -1,
+        countryCode: cCode,
+        country: cName,
+        lastTestedAt: DateTime.now(),
+      );
+
+      ref.read(freeConfigsProvider.notifier).updateSingleNode(updatedNode);
+    } catch (_) {} finally {
+      if (mounted) {
+        setState(() => _testingNodeIds.remove(node.id));
+      }
     }
   }
 
@@ -151,7 +183,14 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
                     tooltip: AppStrings.get('cancel_scan', locale: locale),
                     onPressed: () => ref.read(freeConfigsProvider.notifier).cancelScan(),
                   )
-                else
+                else ...[
+                  if (freeState.workingNodes.isNotEmpty || freeState.timeoutNodes.isNotEmpty)
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.speed_rounded, color: Colors.cyanAccent),
+                      tooltip: AppStrings.get('test_all', locale: locale),
+                      onPressed: () => ref.read(freeConfigsProvider.notifier).testAllFreeNodes(),
+                    ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.autorenew_rounded, color: AppTheme.primaryAccent),
@@ -161,6 +200,7 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
                       ref.read(freeConfigsProvider.notifier).startScan();
                     },
                   ),
+                ],
                 const SizedBox(width: 4),
               ],
             )
@@ -513,24 +553,74 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
                                   ),
                                   const SizedBox(width: 12),
 
-                                  // Real Delay Latency Badge
-                                  if (node.hasValidPing)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.successColor.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(6),
+                                  // Real Delay Latency Badge & Probe Trigger
+                                  if (_testingNodeIds.contains(node.id))
+                                    const Padding(
+                                      padding: EdgeInsets.symmetric(horizontal: 6),
+                                      child: SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent),
                                       ),
-                                      child: Text(
-                                        '${node.latencyMs} ms',
-                                        style: const TextStyle(
-                                          color: AppTheme.successColor,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
+                                    )
+                                  else ...[
+                                    if (node.hasValidPing)
+                                      InkWell(
+                                        onTap: () => _testFreeNodeLatency(node),
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: AppTheme.successColor.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: AppTheme.successColor.withValues(alpha: 0.3), width: 0.8),
+                                          ),
+                                          child: Text(
+                                            '${node.latencyMs} ms',
+                                            style: const TextStyle(
+                                              color: AppTheme.successColor,
+                                              fontSize: 11.5,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                    else if (node.hasTimedOut)
+                                      InkWell(
+                                        onTap: () => _testFreeNodeLatency(node),
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: AppTheme.errorColor.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: AppTheme.errorColor.withValues(alpha: 0.4), width: 0.8),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(Icons.cloud_off_rounded, size: 11, color: AppTheme.errorColor),
+                                              const SizedBox(width: 3),
+                                              Text(
+                                                AppStrings.get('timeout', locale: locale),
+                                                style: const TextStyle(
+                                                  color: AppTheme.errorColor,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
+                                    IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      icon: const Icon(Icons.bolt_rounded, size: 18, color: Colors.cyanAccent),
+                                      tooltip: AppStrings.get('retest_ping', locale: locale),
+                                      onPressed: () => _testFreeNodeLatency(node),
                                     ),
-                                  const SizedBox(width: 8),
+                                  ],
+                                  const SizedBox(width: 6),
 
                                   // Connect Action Button
                                   if (isThisNodeConnecting)
