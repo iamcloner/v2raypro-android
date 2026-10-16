@@ -52,6 +52,12 @@ class LogEntry {
 
   static LogLevel parseLevel(String line) {
     final lower = line.toLowerCase();
+    if (lower.contains("received data after end_stream") ||
+        lower.contains("connection reset by peer") ||
+        lower.contains("broken pipe") ||
+        lower.contains("closed network connection")) {
+      return LogLevel.warning;
+    }
     if (lower.contains("[warning]") || lower.contains("warning:") || lower.contains("warn:")) {
       return LogLevel.warning;
     }

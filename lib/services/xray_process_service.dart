@@ -548,7 +548,7 @@ class XrayProcessService {
       }
     ];
 
-    if (enableTun) {
+    if (enableTun && !Platform.isAndroid) {
       inbounds.add({
         "tag": "tun-in",
         "protocol": "tun",
@@ -602,8 +602,8 @@ class XrayProcessService {
           "0": {
             "handshake": 10,
             "connIdle": 300,
-            "uplinkOnly": 0,
-            "downlinkOnly": 0,
+            "uplinkOnly": 2,
+            "downlinkOnly": 5,
             "statsUserUplink": true,
             "statsUserDownlink": true,
             "buffer": 512
@@ -1594,10 +1594,8 @@ class XrayProcessService {
                   !isCdnError;
 
               if (isAcceptableStatus) {
-                // Handshake latency represents authentic network RTT (TCP + TLS).
-                // Avoid stacking HTTP upgrade request/response turnaround or CDN server queuing delay.
-                final latency = handshakeLatency > 0 ? handshakeLatency : sw.elapsedMilliseconds;
-                completer.complete(latency);
+                final latency = sw.elapsedMilliseconds;
+                completer.complete(latency > 0 ? latency : handshakeLatency);
               } else {
                 completer.complete(null);
               }
@@ -1630,8 +1628,8 @@ class XrayProcessService {
           (data) {
             sw.stop();
             if (!completer.isCompleted) {
-              final latency = handshakeLatency > 0 ? handshakeLatency : sw.elapsedMilliseconds;
-              completer.complete(latency);
+              final latency = sw.elapsedMilliseconds;
+              completer.complete(latency > 0 ? latency : handshakeLatency);
             }
           },
           onError: (_) {

@@ -264,7 +264,23 @@ class V2RayVpnService : VpnService() {
             nm.notify(NOTIFICATION_ID, notification)
 
             if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
+                // 1. Stop old Xray core
+                stopXray()
+                // 2. Stop old tunnel worker to clean up previous SOCKS sessions
+                if (isTun && vpnInterface != null) {
+                    try {
+                        hev.htproxy.TProxyService.TProxyStopService()
+                    } catch (_: Exception) {}
+                }
+                // 3. Start new Xray core with new config
                 startXray(xrayBinary, configPath, assetDir)
+                // 4. Attach fresh tunnel worker to existing VPN file descriptor
+                if (isTun && vpnInterface != null) {
+                    val tunConfig = java.io.File(cacheDir, "tunnel.yaml")
+                    try {
+                        hev.htproxy.TProxyService.TProxyStartService(tunConfig.absolutePath, vpnInterface!!.fd)
+                    } catch (_: Exception) {}
+                }
             }
             return
         }
@@ -353,6 +369,9 @@ misc:
                     tunConfig.writeText(configContent)
 
                     hev.htproxy.TProxyService.TProxyStartService(tunConfig.absolutePath, pfd.fd)
+                } else {
+                    stopVpn()
+                    return
                 }
                 isRunning = true
                 currentSocksPort = socksPort

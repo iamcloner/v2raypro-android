@@ -133,7 +133,7 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
     if (ref.read(autoEnableSysProxyOnConnectProvider) && !ref.read(isSystemProxyEnabledProvider)) {
       ref.read(isSystemProxyEnabledProvider.notifier).toggle(true);
     }
-    if (Platform.isWindows && ref.read(autoEnableTunOnConnectProvider) && !ref.read(isTunEnabledProvider)) {
+    if ((Platform.isWindows || Platform.isAndroid) && ref.read(autoEnableTunOnConnectProvider) && !ref.read(isTunEnabledProvider)) {
       ref.read(isTunEnabledProvider.notifier).toggle(true);
     }
   }
@@ -187,9 +187,7 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
     }
 
     final activeNode = targetNode ?? nodes.firstWhere((n) => n.isActive, orElse: () => nodes.first);
-    final isTun = Platform.isAndroid
-        ? ref.read(isTunEnabledProvider)
-        : (ref.read(isTunEnabledProvider) || ref.read(autoEnableTunOnConnectProvider));
+    final isTun = ref.read(isTunEnabledProvider) || ref.read(autoEnableTunOnConnectProvider);
     final isSysProxy = ref.read(isSystemProxyEnabledProvider) || ref.read(autoEnableSysProxyOnConnectProvider);
     final enableUdp = ref.read(enableUdpProvider);
     final allowLan = ref.read(allowLanProvider);

@@ -64,10 +64,10 @@ void main() {
       final user = config['outbounds'][0]['settings']['vnext'][0]['users'][0] as Map<String, dynamic>;
       expect(user['packetEncoding'], 'xudp');
 
-      // 4. Verify policy levels 0 has uplinkOnly: 0 and downlinkOnly: 0 to prevent upload stalls
+      // 4. Verify policy levels 0 has uplinkOnly: 2 and downlinkOnly: 5 to prevent DATA after END_STREAM protocol errors
       final policyLevel0 = config['policy']['levels']['0'] as Map<String, dynamic>;
-      expect(policyLevel0['uplinkOnly'], 0);
-      expect(policyLevel0['downlinkOnly'], 0);
+      expect(policyLevel0['uplinkOnly'], 2);
+      expect(policyLevel0['downlinkOnly'], 5);
     });
 
     test('Strict protocol probe rejects 404 Not Found and 403 Forbidden responses', () async {
