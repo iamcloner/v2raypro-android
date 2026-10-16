@@ -172,7 +172,9 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
       final nodes = ref.read(nodesProvider);
       final target = nodes.firstWhere((n) => n.id == id, orElse: () => nodes.first);
       state = ConnectionStateEnum.connecting;
-      await XrayProcessService.instance.stop();
+      if (!Platform.isAndroid) {
+        await XrayProcessService.instance.stop();
+      }
       await connect(target);
     }
   }
@@ -220,7 +222,9 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
 
   Future<void> reconnect([ProxyNode? targetNode]) async {
     state = ConnectionStateEnum.connecting;
-    await XrayProcessService.instance.stop();
+    if (!Platform.isAndroid) {
+      await XrayProcessService.instance.stop();
+    }
     await connect(targetNode);
   }
 
@@ -230,7 +234,9 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
       if (nodes.isEmpty) return;
       final active = nodes.firstWhere((n) => n.isActive, orElse: () => nodes.first);
       state = ConnectionStateEnum.connecting;
-      await XrayProcessService.instance.stop();
+      if (!Platform.isAndroid) {
+        await XrayProcessService.instance.stop();
+      }
       await connect(active);
     }
   }

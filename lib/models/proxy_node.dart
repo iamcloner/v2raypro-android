@@ -31,6 +31,7 @@ class ProxyNode {
   final String? echConfigList;
   final String? verifyPeerCertByName;
   final String? certificatePinning;
+  final String? packetEncoding;
   final String? subscriptionId;
   int? latencyMs;
   DateTime? lastTestedAt;
@@ -78,6 +79,7 @@ class ProxyNode {
     this.echConfigList,
     this.verifyPeerCertByName,
     this.certificatePinning,
+    this.packetEncoding,
     this.subscriptionId,
     this.latencyMs,
     this.lastTestedAt,
@@ -117,6 +119,7 @@ class ProxyNode {
     "ech_config_list": echConfigList,
     "verify_peer_cert_by_name": verifyPeerCertByName,
     "certificate_pinning": certificatePinning,
+    "packet_encoding": packetEncoding,
     "subscription_id": subscriptionId,
     "latency_ms": latencyMs,
     "last_tested_at": lastTestedAt?.toIso8601String(),
@@ -166,6 +169,7 @@ class ProxyNode {
       echConfigList: json["ech_config_list"] ?? json["echConfigList"],
       verifyPeerCertByName: json["verify_peer_cert_by_name"] ?? json["verifyPeerCertByName"],
       certificatePinning: json["certificate_pinning"] ?? json["certificatePinning"],
+      packetEncoding: json["packet_encoding"] ?? json["packetEncoding"],
       subscriptionId: json["subscription_id"],
       latencyMs: (json["latency_ms"] as num?)?.toInt(),
       lastTestedAt: json["last_tested_at"] != null ? DateTime.tryParse(json["last_tested_at"]) : null,
@@ -208,6 +212,7 @@ class ProxyNode {
     String? echConfigList,
     String? verifyPeerCertByName,
     String? certificatePinning,
+    String? packetEncoding,
     String? subscriptionId,
     Object? latencyMs = _sentinel,
     bool clearLatency = false,
@@ -253,6 +258,7 @@ class ProxyNode {
       echConfigList: echConfigList ?? this.echConfigList,
       verifyPeerCertByName: verifyPeerCertByName ?? this.verifyPeerCertByName,
       certificatePinning: certificatePinning ?? this.certificatePinning,
+      packetEncoding: packetEncoding ?? this.packetEncoding,
       subscriptionId: subscriptionId ?? this.subscriptionId,
       latencyMs: resolvedLatency,
       lastTestedAt: lastTestedAt ?? this.lastTestedAt,
@@ -284,6 +290,8 @@ class ProxyNode {
         if (path != null && path!.isNotEmpty) params['path'] = path!;
         if (mode != null && mode!.isNotEmpty) params['mode'] = mode!;
         if (extra != null && extra!.isNotEmpty) params['extra'] = extra!;
+        if (echConfigList != null && echConfigList!.isNotEmpty) params['ech'] = echConfigList!;
+        if (packetEncoding != null && packetEncoding!.isNotEmpty) params['packetEncoding'] = packetEncoding!;
 
         final query = params.entries
             .map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')

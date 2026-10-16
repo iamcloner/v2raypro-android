@@ -154,6 +154,21 @@ class ConfigParser {
         alpnList = params['alpn']!.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       }
 
+      final ech = params['ech'] ??
+          params['echconfig'] ??
+          params['echConfig'] ??
+          params['echConfigList'] ??
+          params['ech_config_list'];
+      final certPin = params['pin'] ??
+          params['certPin'] ??
+          params['pinnedPeerCertificatePublicKeySha256'] ??
+          params['pinnedPeerCertSha256'];
+      final verifyPeer = params['verifyPeerCertByName'] ??
+          params['verify_peer_cert_by_name'];
+      final packetEnc = params['packetEncoding'] ??
+          params['packet_encoding'];
+      final sniVal = params['sni'] ?? params['host'] ?? params['peer'] ?? params['serverName'];
+
       return ProxyNode(
         id: const Uuid().v4(),
         name: name,
@@ -166,7 +181,7 @@ class ConfigParser {
         host: params['host'],
         serviceName: params['serviceName'],
         security: security,
-        sni: params['sni'] ?? params['host'],
+        sni: sniVal,
         alpn: alpnList,
         allowInsecure: params['allowInsecure'] == '1' ||
             params['allowInsecure'] == 'true' ||
@@ -180,6 +195,10 @@ class ConfigParser {
         extra: params['extra'],
         flow: params['flow'],
         headerType: params['headerType'],
+        echConfigList: ech,
+        verifyPeerCertByName: verifyPeer,
+        certificatePinning: certPin,
+        packetEncoding: packetEnc,
       );
     } catch (_) {
       return null;
@@ -237,6 +256,12 @@ class ConfigParser {
           map['allowInsecure'] == '1' ||
           map['allowInsecure'] == true;
 
+      final ech = (map['ech'] ?? map['echconfig'] ?? map['echConfig'] ?? map['echConfigList'] ?? map['ech_config_list'])?.toString();
+      final certPin = (map['pin'] ?? map['certPin'] ?? map['pinnedPeerCertificatePublicKeySha256'] ?? map['pinnedPeerCertSha256'])?.toString();
+      final verifyPeer = (map['verifyPeerCertByName'] ?? map['verify_peer_cert_by_name'])?.toString();
+      final packetEnc = (map['packetEncoding'] ?? map['packet_encoding'])?.toString();
+      final sniVal = (map['sni'] ?? map['host'] ?? map['peer'] ?? map['serverName'])?.toString();
+
       return ProxyNode(
         id: const Uuid().v4(),
         name: name,
@@ -250,11 +275,15 @@ class ConfigParser {
         path: map['path']?.toString(),
         host: map['host']?.toString(),
         security: security,
-        sni: map['sni']?.toString() ?? map['host']?.toString(),
+        sni: sniVal,
         alpn: alpnList,
         allowInsecure: allowInsecure,
         fingerprint: map['fp']?.toString(),
         headerType: map['type']?.toString(),
+        echConfigList: ech,
+        verifyPeerCertByName: verifyPeer,
+        certificatePinning: certPin,
+        packetEncoding: packetEnc,
       );
     } catch (_) {
       return null;
@@ -301,6 +330,21 @@ class ConfigParser {
         alpnList = params['alpn']!.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       }
 
+      final ech = params['ech'] ??
+          params['echconfig'] ??
+          params['echConfig'] ??
+          params['echConfigList'] ??
+          params['ech_config_list'];
+      final certPin = params['pin'] ??
+          params['certPin'] ??
+          params['pinnedPeerCertificatePublicKeySha256'] ??
+          params['pinnedPeerCertSha256'];
+      final verifyPeer = params['verifyPeerCertByName'] ??
+          params['verify_peer_cert_by_name'];
+      final packetEnc = params['packetEncoding'] ??
+          params['packet_encoding'];
+      final sniVal = params['sni'] ?? params['host'] ?? params['peer'] ?? params['serverName'];
+
       return ProxyNode(
         id: const Uuid().v4(),
         name: name,
@@ -313,7 +357,7 @@ class ConfigParser {
         host: params['host'],
         serviceName: params['serviceName'],
         security: security,
-        sni: params['sni'] ?? params['host'],
+        sni: sniVal,
         alpn: alpnList,
         allowInsecure: params['allowInsecure'] == '1' ||
             params['allowInsecure'] == 'true' ||
@@ -322,6 +366,10 @@ class ConfigParser {
         fingerprint: params['fp'] ?? params['fingerprint'],
         flow: params['flow'],
         headerType: params['headerType'],
+        echConfigList: ech,
+        verifyPeerCertByName: verifyPeer,
+        certificatePinning: certPin,
+        packetEncoding: packetEnc,
       );
     } catch (_) {
       return null;
@@ -467,6 +515,8 @@ class ConfigParser {
       String? publicKey;
       String? shortId;
 
+      String? echConfigList;
+
       if (map['tls'] is Map) {
         final tls = map['tls'] as Map<String, dynamic>;
         if (tls['enabled'] == true) {
@@ -479,6 +529,14 @@ class ConfigParser {
           if (tls['utls'] is Map) {
             fingerprint = (tls['utls'] as Map)['fingerprint'] as String?;
           }
+          if (tls['ech'] is Map) {
+            final ech = tls['ech'] as Map<String, dynamic>;
+            if (ech['config'] is List) {
+              echConfigList = (ech['config'] as List).map((e) => e.toString()).join(',');
+            } else if (ech['config'] != null) {
+              echConfigList = ech['config'].toString();
+            }
+          }
           if (tls['reality'] is Map) {
             final reality = tls['reality'] as Map<String, dynamic>;
             if (reality['enabled'] == true) {
@@ -489,6 +547,8 @@ class ConfigParser {
           }
         }
       }
+
+      final packetEncoding = (map['packet_encoding'] ?? map['packetEncoding'])?.toString();
 
       // Transport
       NetworkType network = NetworkType.tcp;
@@ -545,6 +605,8 @@ class ConfigParser {
         publicKey: publicKey,
         shortId: shortId,
         flow: flow,
+        echConfigList: echConfigList,
+        packetEncoding: packetEncoding,
       );
     } catch (_) {
       return null;

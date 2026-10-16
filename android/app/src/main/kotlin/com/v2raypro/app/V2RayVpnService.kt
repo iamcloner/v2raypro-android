@@ -32,9 +32,14 @@ class V2RayVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
-    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
     private var xrayProcess: java.lang.Process? = null
     private val logLock = Any()
+
+    // Active connection state tracking for seamless config switching
+    private var currentSocksPort: Int = 10999
+    private var currentIsTun: Boolean = true
+    private var currentRoutingMode: String = "exclusive"
+    private var currentRoutingList: ArrayList<String> = arrayListOf()
 
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -171,28 +176,46 @@ class V2RayVpnService : VpnService() {
             Thread {
                 try {
                     val logFile = java.io.File(cacheDir, "xray.log")
+                    val buffer = StringBuilder()
+                    var lineCount = 0
+
                     proc.inputStream.bufferedReader().use { reader ->
                         var line: String? = reader.readLine()
                         while (proc.isAlive && line != null) {
-                            val textToLog = line
-                            synchronized(logLock) {
-                                try {
-                                    if (logFile.exists() && logFile.length() > 500 * 1024) {
-                                        val lines = logFile.readLines()
-                                        val keep = if (lines.size > 200) lines.takeLast(200) else lines
-                                        logFile.writeText(keep.joinToString("\n") + "\n")
-                                    }
-                                    logFile.appendText(textToLog + "\n")
-                                } catch (_: Exception) {}
+                            buffer.append(line).append("\n")
+                            lineCount++
+
+                            // Bounded batch flushing: avoids continuous disk I/O and CPU spikes
+                            if (lineCount >= 20) {
+                                synchronized(logLock) {
+                                    try {
+                                        if (logFile.exists() && logFile.length() > 256 * 1024) {
+                                            val lines = logFile.readLines()
+                                            val keep = if (lines.size > 150) lines.takeLast(150) else lines
+                                            logFile.writeText(keep.joinToString("\n") + "\n")
+                                        }
+                                        logFile.appendText(buffer.toString())
+                                    } catch (_: Exception) {}
+                                }
+                                buffer.setLength(0)
+                                lineCount = 0
                             }
                             line = reader.readLine()
+                        }
+
+                        if (buffer.isNotEmpty()) {
+                            synchronized(logLock) {
+                                try {
+                                    logFile.appendText(buffer.toString())
+                                } catch (_: Exception) {}
+                            }
                         }
                     }
                 } catch (_: Exception) {}
             }.start()
 
-            // Wait 300ms to ensure process starts cleanly
-            Thread.sleep(300)
+            // Wait 200ms to ensure process starts cleanly
+            Thread.sleep(200)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -200,9 +223,13 @@ class V2RayVpnService : VpnService() {
 
     private fun stopXray() {
         try {
-            xrayProcess?.destroy()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                xrayProcess?.destroyForcibly()
+            val proc = xrayProcess
+            if (proc != null) {
+                proc.destroy()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    proc.destroyForcibly()
+                }
+                proc.waitFor(800, java.util.concurrent.TimeUnit.MILLISECONDS)
             }
         } catch (_: Exception) {}
         xrayProcess = null
@@ -221,17 +248,49 @@ class V2RayVpnService : VpnService() {
         configPath: String = "",
         assetDir: String = ""
     ) {
+        // 1. Check if we can perform a seamless in-place config switch:
+        // If VPN is already active, TUN interface is valid, and routing/ports have not changed,
+        // we keep the existing VPN interface and hev tunnel intact and simply restart Xray core with the new config!
+        val canSeamlessSwitch = isRunning &&
+                isTun == currentIsTun &&
+                socksPort == currentSocksPort &&
+                appRoutingMode == currentRoutingMode &&
+                appRoutingList == currentRoutingList &&
+                (if (isTun) vpnInterface != null else true)
+
+        if (canSeamlessSwitch) {
+            val notification = createNotification(configName, notificationTitle, disconnectText)
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, notification)
+
+            if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
+                startXray(xrayBinary, configPath, assetDir)
+            }
+            return
+        }
+
+        // 2. Full start or full re-establishment:
+        // If previous session was active, cleanly stop old tunnel and core first
+        if (isRunning) {
+            stopXray()
+            try {
+                hev.htproxy.TProxyService.TProxyStopService()
+            } catch (_: Exception) {}
+            try {
+                vpnInterface?.close()
+                vpnInterface = null
+            } catch (_: Exception) {}
+        }
+
         val notification = createNotification(configName, notificationTitle, disconnectText)
         startForeground(NOTIFICATION_ID, notification)
 
+        // Transient 10s wake lock during startup only to prevent sleep during initial connection,
+        // without permanently draining battery in background.
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
-            wakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "V2RayPro:VpnWakeLock")
-            wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24h safety limit
-
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
-            wifiLock = wm?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "V2RayPro:WifiLock")
-            wifiLock?.acquire()
+            wakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "V2RayPro:VpnStartupLock")
+            wakeLock?.acquire(10 * 1000L)
         } catch (_: Exception) {}
 
         if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
@@ -246,22 +305,15 @@ class V2RayVpnService : VpnService() {
                     .addRoute("0.0.0.0", 0)
                     .addDnsServer("1.1.1.1")
                     .addDnsServer("8.8.8.8")
-                    .setMtu(8500)
-
+                    .setMtu(1500) // Standard 1500 MTU to eliminate packet fragmentation and restore max upload speed
 
                 if (appRoutingMode == "inclusive" && appRoutingList.isNotEmpty()) {
-                    // Inclusive mode: ONLY the selected applications are routed through the VPN tunnel.
-                    // All other apps bypass the tunnel and connect directly.
-                    // Note: Our own package is NOT added to allowed list, so Xray core connections
-                    // bypass the VPN automatically without loopback recursion!
                     for (pkg in appRoutingList) {
                         try {
                             builder.addAllowedApplication(pkg)
                         } catch (_: Exception) {}
                     }
                 } else {
-                    // Exclusive mode (default): Selected applications bypass the VPN tunnel.
-                    // Our own package MUST be excluded so Xray loopback doesn't cause recursion.
                     try {
                         builder.addDisallowedApplication(packageName)
                     } catch (_: Exception) {}
@@ -281,7 +333,7 @@ class V2RayVpnService : VpnService() {
                     val tunConfig = java.io.File(cacheDir, "tunnel.yaml")
                     val configContent = """
 tunnel:
-  mtu: 8500
+  mtu: 1500
   ipv4: 26.26.26.1
 
 socks5:
@@ -293,6 +345,8 @@ misc:
   task-stack-size: 20480
   connect-timeout: 5000
   read-write-timeout: 60000
+  tcp-buffer-size: 65536
+  udp-recv-buffer-size: 65536
   limit-nofile: 65535
   log-level: warn
 """.trimIndent()
@@ -301,6 +355,10 @@ misc:
                     hev.htproxy.TProxyService.TProxyStartService(tunConfig.absolutePath, pfd.fd)
                 }
                 isRunning = true
+                currentSocksPort = socksPort
+                currentIsTun = isTun
+                currentRoutingMode = appRoutingMode
+                currentRoutingList = ArrayList(appRoutingList)
             } catch (e: Exception) {
                 e.printStackTrace()
                 stopVpn()
@@ -309,6 +367,10 @@ misc:
             // Proxy Mode: No VPN tunnel is established; VPN key icon does NOT appear!
             vpnInterface = null
             isRunning = true
+            currentSocksPort = socksPort
+            currentIsTun = false
+            currentRoutingMode = appRoutingMode
+            currentRoutingList = ArrayList(appRoutingList)
         }
 
         if (isRunning) {
@@ -343,13 +405,6 @@ misc:
         } catch (_: Exception) {}
         wakeLock = null
 
-        try {
-            if (wifiLock?.isHeld == true) {
-                wifiLock?.release()
-            }
-        } catch (_: Exception) {}
-        wifiLock = null
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -360,8 +415,6 @@ misc:
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Keep foreground service active when app is swiped from recents!
-        // Do NOT call stopVpn() here!
         super.onTaskRemoved(rootIntent)
     }
 

@@ -501,9 +501,9 @@ Future<Map<String, RealDelayResult>> testRealDelayBatch({
     }
   }
 
-  // Test unresolved nodes concurrently in parallel chunks of 10
+  // Test unresolved nodes concurrently in parallel chunks of 25
   if (unresolvedNodes.isNotEmpty) {
-    const int chunkSize = 10;
+    const int chunkSize = 25;
     for (int i = 0; i < unresolvedNodes.length; i += chunkSize) {
       final end = math.min(i + chunkSize, unresolvedNodes.length);
       final chunk = unresolvedNodes.sublist(i, end);

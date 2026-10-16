@@ -414,6 +414,7 @@ class XrayProcessService {
 
     streamSettings["sockopt"] = {
       "tcpKeepAliveInterval": 15,
+      "tcpNoDelay": true,
       "mark": 255,
     };
 
@@ -426,6 +427,11 @@ class XrayProcessService {
       };
       if (node.flow != null && node.flow!.trim().isNotEmpty) {
         user["flow"] = node.flow!.trim();
+      }
+      if (node.packetEncoding != null && node.packetEncoding!.trim().isNotEmpty) {
+        user["packetEncoding"] = node.packetEncoding!.trim();
+      } else {
+        user["packetEncoding"] = "xudp";
       }
       outbound = {
         "tag": "proxy",
@@ -442,22 +448,33 @@ class XrayProcessService {
         "streamSettings": streamSettings,
       };
     } else if (node.protocol == ProtocolType.trojan) {
+      final serverMap = <String, dynamic>{
+        "address": node.address,
+        "port": node.port,
+        "password": node.uuidOrPassword,
+        "level": 0
+      };
+      if (node.packetEncoding != null && node.packetEncoding!.trim().isNotEmpty) {
+        serverMap["packetEncoding"] = node.packetEncoding!.trim();
+      }
       outbound = {
         "tag": "proxy",
         "protocol": "trojan",
         "settings": {
-          "servers": [
-            {
-              "address": node.address,
-              "port": node.port,
-              "password": node.uuidOrPassword,
-              "level": 0
-            }
-          ]
+          "servers": [serverMap]
         },
         "streamSettings": streamSettings,
       };
     } else if (node.protocol == ProtocolType.vmess) {
+      final userMap = <String, dynamic>{
+        "id": node.uuidOrPassword,
+        "alterId": node.alterId,
+        "security": node.cipher ?? "auto",
+        "level": 0
+      };
+      if (node.packetEncoding != null && node.packetEncoding!.trim().isNotEmpty) {
+        userMap["packetEncoding"] = node.packetEncoding!.trim();
+      }
       outbound = {
         "tag": "proxy",
         "protocol": "vmess",
@@ -466,14 +483,7 @@ class XrayProcessService {
             {
               "address": node.address,
               "port": node.port,
-              "users": [
-                {
-                  "id": node.uuidOrPassword,
-                  "alterId": node.alterId,
-                  "security": node.cipher ?? "auto",
-                  "level": 0
-                }
-              ]
+              "users": [userMap]
             }
           ]
         },
@@ -590,10 +600,10 @@ class XrayProcessService {
       "policy": {
         "levels": {
           "0": {
-            "handshake": 8,
+            "handshake": 10,
             "connIdle": 300,
-            "uplinkOnly": 2,
-            "downlinkOnly": 5,
+            "uplinkOnly": 0,
+            "downlinkOnly": 0,
             "statsUserUplink": true,
             "statsUserDownlink": true,
             "buffer": 512
@@ -716,8 +726,13 @@ class XrayProcessService {
     String? notificationTitle,
     String? disconnectText,
   }) async {
-    // Always stop and cleanup any existing process
-    await stop();
+    final isAndroidRunning = Platform.isAndroid && (await isAndroidVpnRunning());
+
+    // On Windows or if Android VPN is not yet running, ensure cleanup.
+    // If Android VPN is already running, avoid tearing down VPN service to allow seamless core reload.
+    if (!isAndroidRunning) {
+      await stop();
+    }
 
     _state = EngineState.starting;
     LogService.instance.add("Initializing Xray core for node: ${node.name} (${node.address}:${node.port}) [TUN: $enableTun, SysProxy: $setSysProxy, UDP: $enableUdp, LAN: ${allowLan || globalAllowLan}]", level: LogLevel.info, source: "system");
@@ -733,24 +748,26 @@ class XrayProcessService {
       return false;
     }
 
-    // Verify and ensure inbound ports are free before launching Xray
-    final socksOk = await _ensurePortAvailable(socksPort);
-    if (!socksOk) {
-      _state = EngineState.error;
-      LogService.instance.add("SOCKS port $socksPort is occupied by another application. Please change it in Settings.", level: LogLevel.error, source: "system");
-      return false;
-    }
+    // Verify and ensure inbound ports are free before launching Xray (skip if already owned by running Android VPN)
+    if (!isAndroidRunning) {
+      final socksOk = await _ensurePortAvailable(socksPort);
+      if (!socksOk) {
+        _state = EngineState.error;
+        LogService.instance.add("SOCKS port $socksPort is occupied by another application. Please change it in Settings.", level: LogLevel.error, source: "system");
+        return false;
+      }
 
-    final httpOk = await _ensurePortAvailable(httpPort);
-    if (!httpOk) {
-      _state = EngineState.error;
-      LogService.instance.add("HTTP port $httpPort is occupied by another application. Please change it in Settings.", level: LogLevel.error, source: "system");
-      return false;
-    }
+      final httpOk = await _ensurePortAvailable(httpPort);
+      if (!httpOk) {
+        _state = EngineState.error;
+        LogService.instance.add("HTTP port $httpPort is occupied by another application. Please change it in Settings.", level: LogLevel.error, source: "system");
+        return false;
+      }
 
-    final apiOk = await _ensurePortAvailable(apiPort);
-    if (!apiOk) {
-      LogService.instance.add("API port $apiPort is occupied by another application. Traffic stats may be unavailable.", level: LogLevel.warning, source: "system");
+      final apiOk = await _ensurePortAvailable(apiPort);
+      if (!apiOk) {
+        LogService.instance.add("API port $apiPort is occupied by another application. Traffic stats may be unavailable.", level: LogLevel.warning, source: "system");
+      }
     }
 
     try {
@@ -1454,13 +1471,18 @@ class XrayProcessService {
   }
 
   Future<int?> _singleProtocolProbe(ProxyNode node, Duration timeout) async {
-    final effectiveTimeout = timeout > const Duration(milliseconds: 1500)
-        ? const Duration(milliseconds: 1200)
-        : timeout;
+    final addr = node.address.trim();
+    if (addr.isEmpty ||
+        addr == '0.0.0.0' ||
+        node.port <= 0 ||
+        node.port > 65535) {
+      return null;
+    }
+
     final sw = Stopwatch()..start();
     Socket? rawSocket;
     try {
-      rawSocket = await Socket.connect(node.address, node.port, timeout: effectiveTimeout);
+      rawSocket = await Socket.connect(node.address, node.port, timeout: timeout);
       final tcpLatency = sw.elapsedMilliseconds;
       Socket activeSocket = rawSocket;
 
@@ -1478,7 +1500,7 @@ class XrayProcessService {
             rawSocket,
             host: sni,
             onBadCertificate: (_) => node.allowInsecure || globalAllowInsecure,
-          ).timeout(effectiveTimeout);
+          ).timeout(timeout);
           handshakeLatency = sw.elapsedMilliseconds;
         } catch (_) {
           rawSocket.destroy();
@@ -1492,7 +1514,7 @@ class XrayProcessService {
             rawSocket,
             host: sni,
             onBadCertificate: (_) => true,
-          ).timeout(effectiveTimeout);
+          ).timeout(timeout);
           activeSocket = probe;
           handshakeLatency = sw.elapsedMilliseconds;
         } catch (_) {
@@ -1559,13 +1581,16 @@ class XrayProcessService {
                   responseStr.contains('<HTML') ||
                   responseStr.contains('<title>');
 
-              // Authentic 101 Switching Protocols, 200/204, or non-HTML 400/404 (standard raw Xray/V2Ray origin response):
-              // Reject 403, 301, 302, 5xx, or CDN HTML error pages
+              // Authentic 101 Switching Protocols, 200/204, or non-HTML 400 (standard raw Xray/V2Ray origin response):
+              // Reject 403, 404, 301, 302, 5xx, or CDN HTML error pages
               final isAcceptableStatus = (firstLine.contains(' 101 ') ||
                       firstLine.contains(' 200 ') ||
                       firstLine.contains(' 204 ') ||
-                      firstLine.contains(' 400 ') ||
-                      firstLine.contains(' 404 ')) &&
+                      firstLine.contains(' 400 ')) &&
+                  !firstLine.contains(' 404 ') &&
+                  !firstLine.contains(' 403 ') &&
+                  !firstLine.contains(' 301 ') &&
+                  !firstLine.contains(' 302 ') &&
                   !isCdnError;
 
               if (isAcceptableStatus) {
@@ -1586,7 +1611,7 @@ class XrayProcessService {
           },
         );
 
-        final result = await completer.future.timeout(effectiveTimeout, onTimeout: () => null);
+        final result = await completer.future.timeout(timeout, onTimeout: () => null);
         await subscription.cancel();
         activeSocket.destroy();
         return result;
@@ -1617,7 +1642,7 @@ class XrayProcessService {
           },
         );
 
-        final result = await completer.future.timeout(effectiveTimeout, onTimeout: () => null);
+        final result = await completer.future.timeout(timeout, onTimeout: () => null);
         await subscription.cancel();
         activeSocket.destroy();
         return result;

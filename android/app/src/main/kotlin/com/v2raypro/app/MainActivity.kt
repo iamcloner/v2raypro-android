@@ -146,8 +146,18 @@ class MainActivity : FlutterActivity() {
                     val logFile = File(cacheDir, "xray.log")
                     if (logFile.exists()) {
                         try {
-                            val lines = logFile.readLines()
-                            val recent = if (lines.size > 200) lines.takeLast(200) else lines
+                            val lines = ArrayList<String>()
+                            logFile.bufferedReader().use { reader ->
+                                var l = reader.readLine()
+                                while (l != null) {
+                                    lines.add(l)
+                                    if (lines.size > 300) {
+                                        lines.removeAt(0)
+                                    }
+                                    l = reader.readLine()
+                                }
+                            }
+                            val recent = if (lines.size > 150) lines.takeLast(150) else lines
                             result.success(recent)
                         } catch (e: Exception) {
                             result.success(listOf<String>())

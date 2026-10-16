@@ -194,7 +194,7 @@ class FreeConfigsService {
       ));
 
       // 6. Test all unique nodes in chunked batches using ephemeral multi-inbound Xray process
-      const int batchSize = 10;
+      const int batchSize = 25;
       int testedCount = 0;
       final testStartTime = DateTime.now();
 
@@ -204,10 +204,10 @@ class FreeConfigsService {
         final chunk = uniqueNodes.sublist(i, end);
 
         final resMap = await testRealDelayBatch(
-          mode: testMode != null && testMode.toString().contains('turbo') ? 'turbo' : 'normal',
+          mode: 'turbo',
           type: 'xray',
           configs: chunk.map((n) => n.toJson()).toList(),
-          timeout: const Duration(milliseconds: 3200),
+          timeout: const Duration(milliseconds: 2200),
         );
         if (_isCancelled) break;
 
