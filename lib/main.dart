@@ -1708,11 +1708,11 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                             Flexible(
                               child: Text(
                                 outbound.country != null
-                                    ? '${outbound.country}${outbound.city != null ? ' (${outbound.city})' : ''}'
+                                    ? '${outbound.country!}${outbound.city != null ? ' (${outbound.city})' : ''}'
                                     : (activeNode?.country != null
                                         ? activeNode!.country!
-                                        : ((activeNode?.countryCode != null && CountryService.getCountryName(activeNode!.countryCode).isNotEmpty)
-                                            ? CountryService.getCountryName(activeNode!.countryCode)
+                                        : (activeNode?.countryCode != null && CountryService.getCountryName(activeNode!.countryCode) != null
+                                            ? CountryService.getCountryName(activeNode!.countryCode)!
                                             : (outbound.isLoading
                                                 ? AppStrings.get('fetching_ip', locale: locale)
                                                 : AppStrings.get('unknown_location', locale: locale)))),
