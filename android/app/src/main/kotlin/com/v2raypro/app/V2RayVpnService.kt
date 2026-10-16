@@ -31,6 +31,7 @@ class V2RayVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -144,6 +145,10 @@ class V2RayVpnService : VpnService() {
             val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
             wakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "V2RayPro:VpnWakeLock")
             wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24h safety limit
+
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            wifiLock = wm?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "V2RayPro:WifiLock")
+            wifiLock?.acquire()
         } catch (_: Exception) {}
 
         if (isTun) {
@@ -198,6 +203,10 @@ socks5:
   udp: 'udp'
 
 misc:
+  task-stack-size: 20480
+  connect-timeout: 5000
+  read-write-timeout: 60000
+  limit-nofile: 65535
   log-level: warn
 """.trimIndent()
                     tunConfig.writeText(configContent)
@@ -232,6 +241,13 @@ misc:
             }
         } catch (_: Exception) {}
         wakeLock = null
+
+        try {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
+        } catch (_: Exception) {}
+        wifiLock = null
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)

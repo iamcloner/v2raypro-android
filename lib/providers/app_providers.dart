@@ -43,7 +43,52 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
       final isRunning = await XrayProcessService.instance.isAndroidVpnRunning();
       if (isRunning && state != ConnectionStateEnum.connected) {
         state = ConnectionStateEnum.connected;
-        ref.read(connectedAtProvider.notifier).state ??= DateTime.now();
+        XrayProcessService.instance.restoreRunningState();
+
+        final session = await StorageService.instance.loadActiveSession();
+        if (session != null) {
+          final connectedAt = session['connectedAt'] as DateTime?;
+          final nodeId = session['nodeId'] as String?;
+          final exitIp = session['exitIp'] as String?;
+          final country = session['country'] as String?;
+          final countryCode = session['countryCode'] as String?;
+          final up = session['uplinkBytes'] as int? ?? 0;
+          final down = session['downlinkBytes'] as int? ?? 0;
+
+          if (connectedAt != null) {
+            ref.read(connectedAtProvider.notifier).state = connectedAt;
+          } else {
+            ref.read(connectedAtProvider.notifier).state = DateTime.now();
+          }
+
+          if (nodeId != null) {
+            ref.read(nodesProvider.notifier).setActive(nodeId);
+            final nodes = ref.read(nodesProvider);
+            final active = nodes.where((n) => n.id == nodeId).firstOrNull;
+            if (active != null) {
+              XrayProcessService.instance.setActiveRunningNode(active);
+            }
+          }
+
+          if (exitIp != null || countryCode != null) {
+            ref.read(outboundInfoProvider.notifier).setRestored(
+              ipv4: exitIp?.contains('.') == true ? exitIp : null,
+              ipv6: exitIp?.contains(':') == true ? exitIp : null,
+              country: country,
+              countryCode: countryCode,
+            );
+          }
+
+          ref.read(trafficStatsProvider.notifier).update(
+            TrafficStats(
+              uplinkBytes: up,
+              downlinkBytes: down,
+            ),
+          );
+        } else {
+          ref.read(connectedAtProvider.notifier).state ??= DateTime.now();
+        }
+
         ref.read(outboundInfoProvider.notifier).fetch();
         _testPing();
       }
@@ -51,8 +96,20 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
   }
 
   void setConnected() {
-    ref.read(connectedAtProvider.notifier).state = DateTime.now();
+    final now = DateTime.now();
+    ref.read(connectedAtProvider.notifier).state = now;
     state = ConnectionStateEnum.connected;
+
+    final active = ref.read(nodesProvider).where((n) => n.isActive).firstOrNull;
+    if (active != null) {
+      StorageService.instance.saveActiveSession(
+        nodeId: active.id,
+        connectedAt: now,
+        country: active.country,
+        countryCode: active.countryCode,
+      );
+    }
+
     ref.read(outboundInfoProvider.notifier).fetch();
     _testPing();
     AppTrayService.instance.updateTrayMenu();
@@ -69,6 +126,7 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
     ref.read(connectedAtProvider.notifier).state = null;
     ref.read(outboundInfoProvider.notifier).reset();
     ref.read(trafficStatsProvider.notifier).reset();
+    StorageService.instance.clearActiveSession();
     state = ConnectionStateEnum.disconnected;
     AppTrayService.instance.updateTrayMenu();
   }
@@ -178,10 +236,16 @@ final connectionStatusProvider = StateNotifierProvider<ConnectionStatusNotifier,
 
 class TrafficStatsNotifier extends StateNotifier<TrafficStats> {
   StreamSubscription<TrafficStats>? _sub;
+  DateTime? _lastSaveTime;
 
   TrafficStatsNotifier() : super(const TrafficStats()) {
     _sub = XrayProcessService.instance.trafficStream.listen((stats) {
       state = stats;
+      final now = DateTime.now();
+      if (_lastSaveTime == null || now.difference(_lastSaveTime!).inSeconds >= 5) {
+        _lastSaveTime = now;
+        StorageService.instance.updateActiveSessionTraffic(stats.uplinkBytes, stats.downlinkBytes);
+      }
     });
   }
 
@@ -383,14 +447,20 @@ class NodesNotifier extends StateNotifier<List<ProxyNode>> {
       if (n.id == id) {
         final bool isSuccess = latencyMs != null && latencyMs > 0;
         final String? fromName = CountryService.extractCountryCodeFromName(n.name);
-        final String? verifiedCountryCode = isSuccess
-            ? (countryCode ?? n.countryCode ?? CountryService.resolveSync(n))
-            : (countryCode ?? n.countryCode ?? fromName ?? CountryService.resolveSync(n));
-        final String? verifiedCountry = isSuccess
-            ? (country ?? (verifiedCountryCode != null ? CountryService.getCountryName(verifiedCountryCode) : n.country))
-            : (country ?? (verifiedCountryCode != null ? CountryService.getCountryName(verifiedCountryCode) : n.country));
+        final String? intrinsicCountry = CountryService.resolveSync(n.copyWith(clearCountry: true));
+        final bool clearCountry = !isSuccess && fromName == null && countryCode == null && intrinsicCountry == null;
 
-        final bool clearCountry = !isSuccess && fromName == null && n.countryCode == null && CountryService.resolveSync(n) == null;
+        final String? verifiedCountryCode = clearCountry
+            ? null
+            : (isSuccess
+                ? (countryCode ?? n.countryCode ?? intrinsicCountry)
+                : (countryCode ?? intrinsicCountry ?? fromName));
+
+        final String? verifiedCountry = clearCountry
+            ? null
+            : (isSuccess
+                ? (country ?? (verifiedCountryCode != null ? CountryService.getCountryName(verifiedCountryCode) : n.country))
+                : (country ?? (verifiedCountryCode != null ? CountryService.getCountryName(verifiedCountryCode) : null)));
 
         return n.copyWith(
           latencyMs: latencyMs,
@@ -1785,6 +1855,12 @@ class OutboundInfoNotifier extends StateNotifier<OutboundInfo> {
       isLoading: false,
     );
 
+    StorageService.instance.updateActiveSessionOutbound(
+      exitIp: ipv4 ?? ipv6,
+      country: country,
+      countryCode: countryCode,
+    );
+
     if (countryCode != null && countryCode.isNotEmpty) {
       final active = ref.read(nodesProvider).where((n) => n.isActive).firstOrNull;
       if (active != null) {
@@ -1796,6 +1872,21 @@ class OutboundInfoNotifier extends StateNotifier<OutboundInfo> {
         );
       }
     }
+  }
+
+  void setRestored({
+    String? ipv4,
+    String? ipv6,
+    String? country,
+    String? countryCode,
+  }) {
+    state = OutboundInfo(
+      ipv4: ipv4,
+      ipv6: ipv6,
+      country: country,
+      countryCode: countryCode,
+      isLoading: false,
+    );
   }
 
   void reset() {

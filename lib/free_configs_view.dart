@@ -7,7 +7,6 @@ import 'core/l10n/translations.dart';
 import 'core/theme/app_theme.dart';
 import 'models/proxy_node.dart';
 import 'providers/app_providers.dart';
-import 'services/cdn_scanner_service.dart';
 import 'services/country_service.dart';
 import 'utils/ip_mask_util.dart';
 import 'widgets/country_flag_badge.dart';

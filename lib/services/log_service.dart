@@ -1,4 +1,7 @@
 import "dart:async";
+import "dart:convert";
+import "dart:io";
+import "package:path_provider/path_provider.dart";
 import "../models/log_entry.dart";
 
 class LogService {
@@ -8,9 +11,32 @@ class LogService {
   static const int maxCapacity = 1000;
   final List<LogEntry> _entries = [];
   final StreamController<LogEntry> _controller = StreamController<LogEntry>.broadcast();
+  Timer? _saveDebounceTimer;
+  File? _logFile;
+  bool _initialized = false;
 
   Stream<LogEntry> get onNewLog => _controller.stream;
   List<LogEntry> get logs => List<LogEntry>.from(_entries);
+
+  Future<void> init() async {
+    if (_initialized) return;
+    _initialized = true;
+    try {
+      final dir = await getApplicationSupportDirectory();
+      _logFile = File("${dir.path}/v2raypro_logs.json");
+      if (await _logFile!.exists()) {
+        final content = await _logFile!.readAsString();
+        if (content.isNotEmpty) {
+          final list = jsonDecode(content) as List;
+          final loaded = list
+              .map((e) => LogEntry.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _entries.clear();
+          _entries.addAll(loaded);
+        }
+      }
+    } catch (_) {}
+  }
 
   void add(String message, {LogLevel level = LogLevel.info, String source = "system"}) {
     if (message.trim().isEmpty) return;
@@ -42,10 +68,33 @@ class LogService {
     }
     _entries.add(entry);
     _controller.add(entry);
+    _scheduleSave();
   }
 
-  void clear() {
+  void _scheduleSave() {
+    _saveDebounceTimer?.cancel();
+    _saveDebounceTimer = Timer(const Duration(milliseconds: 1000), () async {
+      try {
+        if (_logFile == null) {
+          final dir = await getApplicationSupportDirectory();
+          _logFile = File("${dir.path}/v2raypro_logs.json");
+        }
+        final toSave = _entries.length > 500
+            ? _entries.sublist(_entries.length - 500)
+            : _entries;
+        final jsonList = toSave.map((e) => e.toJson()).toList();
+        await _logFile!.writeAsString(jsonEncode(jsonList));
+      } catch (_) {}
+    });
+  }
+
+  Future<void> clear() async {
     _entries.clear();
-    // Dispatch a dummy sentinel or state reset through provider
+    _saveDebounceTimer?.cancel();
+    try {
+      if (_logFile != null && await _logFile!.exists()) {
+        await _logFile!.delete();
+      }
+    } catch (_) {}
   }
 }

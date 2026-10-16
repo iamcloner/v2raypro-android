@@ -29,6 +29,27 @@ class LogEntry {
     return "$h:$m:$s.$ms";
   }
 
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'timestamp': timestamp.millisecondsSinceEpoch,
+    'level': level.name,
+    'message': message,
+    'source': source,
+  };
+
+  factory LogEntry.fromJson(Map<String, dynamic> json) => LogEntry(
+    id: json['id'] as String?,
+    timestamp: json['timestamp'] != null
+        ? DateTime.fromMillisecondsSinceEpoch(json['timestamp'] as int)
+        : null,
+    level: LogLevel.values.firstWhere(
+      (l) => l.name == json['level'],
+      orElse: () => LogLevel.info,
+    ),
+    message: json['message'] as String? ?? '',
+    source: json['source'] as String? ?? 'system',
+  );
+
   static LogLevel parseLevel(String line) {
     final lower = line.toLowerCase();
     if (lower.contains("[warning]") || lower.contains("warning:") || lower.contains("warn:")) {

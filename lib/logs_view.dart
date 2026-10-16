@@ -20,6 +20,7 @@ class _LogsViewState extends ConsumerState<LogsView> {
   final ScrollController _scrollController = ScrollController();
   LogLevel? _selectedLevel; // null means 'All'
   bool _autoScroll = true;
+  bool _showLast100Only = true;
   String _searchQuery = "";
 
   @override
@@ -113,6 +114,10 @@ class _LogsViewState extends ConsumerState<LogsView> {
       return true;
     }).toList();
 
+    final displayedLogs = (_showLast100Only && filteredLogs.length > 100)
+        ? filteredLogs.sublist(filteredLogs.length - 100)
+        : filteredLogs;
+
     // Trigger auto-scroll if enabled and new logs arrived
     ref.listen<List<LogEntry>>(logsProvider, (_, __) {
       _scrollToBottom();
@@ -156,7 +161,9 @@ class _LogsViewState extends ConsumerState<LogsView> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${filteredLogs.length}',
+                      _showLast100Only && filteredLogs.length > 100
+                          ? '100 / ${filteredLogs.length}'
+                          : '${filteredLogs.length}',
                       style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant, fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -382,6 +389,29 @@ class _LogsViewState extends ConsumerState<LogsView> {
                   color: const Color(0xFF34D399),
                   onSelected: () => setState(() => _selectedLevel = LogLevel.access),
                 ),
+                // Toggle Chip: Last 100 logs only
+                FilterChip(
+                  avatar: Icon(
+                    _showLast100Only ? Icons.filter_1_rounded : Icons.all_inclusive_rounded,
+                    size: 15,
+                    color: _showLast100Only ? Colors.white : Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  label: Text(
+                    _showLast100Only
+                        ? (locale == 'fa' ? '۱۰۰ لاگ آخر' : 'Last 100 logs')
+                        : (locale == 'fa' ? 'همه لاگ‌ها' : 'All logs'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: _showLast100Only ? Colors.white : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  selected: _showLast100Only,
+                  selectedColor: AppTheme.primaryAccent,
+                  backgroundColor: Theme.of(context).cardColor,
+                  checkmarkColor: Colors.white,
+                  onSelected: (val) => setState(() => _showLast100Only = val),
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -397,7 +427,7 @@ class _LogsViewState extends ConsumerState<LogsView> {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: filteredLogs.isEmpty
+                  child: displayedLogs.isEmpty
                       ? Center(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
@@ -428,9 +458,9 @@ class _LogsViewState extends ConsumerState<LogsView> {
                           child: ListView.builder(
                             controller: _scrollController,
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            itemCount: filteredLogs.length,
+                            itemCount: displayedLogs.length,
                             itemBuilder: (context, index) {
-                              final entry = filteredLogs[index];
+                              final entry = displayedLogs[index];
                               final lvlColor = _levelColor(entry.level);
                               final isDark = Theme.of(context).brightness == Brightness.dark;
                               return Padding(

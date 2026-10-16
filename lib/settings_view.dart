@@ -264,6 +264,8 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
               _appProgress = p;
               if (phase == 'downloading') {
                 _appStatusMsg = '${AppStrings.get('updating', locale: locale)} ${(p * 100).toInt()}%';
+              } else if (phase == 'installing') {
+                _appStatusMsg = locale == 'fa' ? 'در حال باز کردن نصب‌کننده اندروید...' : 'Opening Android Package Installer...';
               } else if (phase == 'extracting') {
                 _appStatusMsg = AppStrings.get('extracting', locale: locale);
               } else if (phase == 'applying') {
@@ -1760,9 +1762,123 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
 
           // 6. Updates Center (Accordion with Update All)
           _buildCategoryHeader(Icons.system_update_rounded, AppStrings.get('settings_cat_updates', locale: locale)),
-          Card(
-            clipBehavior: Clip.antiAlias,
-            child: ExpansionTile(
+          if (Platform.isAndroid)
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.system_update_rounded, color: Colors.tealAccent, size: 24),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                locale == 'fa' ? 'به‌روزرسانی نرم‌افزار' : 'App Update',
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${locale == 'fa' ? 'نسخه فعلی' : 'Current'}: ${UpdateService.currentAppVersion}${_appInfo != null ? '  •  ${locale == 'fa' ? 'آخرین نسخه' : 'Latest'}: ${_appInfo!.latestVersion}' : ''}',
+                                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_appStatusMsg != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _appStatusMsg!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _appStatusMsg!.contains('up to date') ||
+                                  _appStatusMsg!.contains('به‌روز است') ||
+                                  _appStatusMsg!.contains('موفقیت')
+                              ? AppTheme.successColor
+                              : Colors.amber,
+                        ),
+                      ),
+                    ],
+                    if (_appUpdating) ...[
+                      const SizedBox(height: 10),
+                      LinearProgressIndicator(
+                        value: _appProgress > 0 ? _appProgress : null,
+                        color: Colors.tealAccent,
+                        backgroundColor: Colors.white10,
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: _appInfo?.hasUpdate == true && !_appUpdating
+                          ? ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.successColor,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              icon: const Icon(Icons.downloading_rounded),
+                              label: Text(
+                                locale == 'fa' ? 'دریافت و نصب به‌روزرسانی' : 'Download and Install Update',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              onPressed: _downloadAppUpdate,
+                            )
+                          : FilledButton.icon(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppTheme.primaryAccent,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              icon: _appChecking
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                    )
+                                  : const Icon(Icons.refresh_rounded),
+                              label: Text(
+                                _appChecking
+                                    ? (locale == 'fa' ? 'در حال بررسی...' : 'Checking...')
+                                    : (locale == 'fa' ? 'بررسی نسخه جدید' : 'Check for Updates'),
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              onPressed: _appChecking || _appUpdating
+                                  ? null
+                                  : () async {
+                                      await _checkAppUpdate();
+                                      if (!context.mounted) return;
+                                      if (_appInfo?.hasUpdate == true) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              locale == 'fa'
+                                                  ? 'نسخه جدید (${_appInfo!.latestVersion}) در دسترس است. برای نصب روی «دریافت و نصب به‌روزرسانی» بزنید.'
+                                                  : 'New version (${_appInfo!.latestVersion}) available. Tap "Download & Install" to update.',
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
               initiallyExpanded: false,
               leading: const Icon(Icons.system_update_rounded, color: AppTheme.primaryAccent),
               title: Row(

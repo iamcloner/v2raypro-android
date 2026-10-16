@@ -6,7 +6,6 @@ import 'routing_view.dart';
 import 'logs_view.dart';
 import 'settings_view.dart';
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -14,20 +13,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'models/proxy_node.dart';
-import 'models/scan_result.dart';
 import 'models/outbound_info.dart';
 import 'models/traffic_stats.dart';
 import 'core/ffi/rust_bridge.dart';
 import 'core/l10n/translations.dart';
 import 'core/theme/app_theme.dart';
 import 'providers/app_providers.dart';
-import 'services/cloudflare_scanner_service.dart';
 import 'services/cdn_scanner_service.dart';
 import 'services/tray_service.dart';
 import 'services/update_service.dart';
 import 'package:local_notifier/local_notifier.dart';
 import 'services/real_delay_service.dart';
 import 'services/xray_process_service.dart';
+import 'services/log_service.dart';
 import 'utils/ip_mask_util.dart';
 import 'widgets/country_flag_badge.dart';
 import 'services/country_service.dart';
@@ -35,6 +33,7 @@ import 'services/country_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   RustBridge.instance.initialize();
+  await LogService.instance.init();
 
   if (Platform.isAndroid) {
     try {
@@ -266,21 +265,13 @@ class _MainShellState extends ConsumerState<MainShell> {
                     : const Icon(Icons.downloading_rounded, size: 18),
                 label: Text(
                   downloading
-                      ? (locale == 'fa' ? 'در حال نصب...' : 'Updating...')
-                      : (locale == 'fa' ? 'دانلود و نصب خودکار' : 'Update Now'),
+                      ? (locale == 'fa' ? 'در حال دانلود...' : 'Downloading...')
+                      : (locale == 'fa' ? 'دانلود و نصب' : 'Download and Install'),
                   style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                 ),
-                onPressed: downloading || info.downloadUrl == null
+                onPressed: downloading
                     ? null
                     : () async {
-                        if (Platform.isAndroid) {
-                          Navigator.of(dialogCtx).pop();
-                          await UpdateService.instance.downloadAndApplyAppUpdate(
-                            info.downloadUrl ?? "https://github.com/iamcloner/v2raypro-android/releases",
-                          );
-                          return;
-                        }
-
                         setDialogState(() {
                           downloading = true;
                           progress = 0.0;
@@ -289,7 +280,7 @@ class _MainShellState extends ConsumerState<MainShell> {
 
                         try {
                           final success = await UpdateService.instance.downloadAndApplyAppUpdate(
-                            info.downloadUrl!,
+                            info.downloadUrl ?? "https://github.com/iamcloner/v2raypro-android/releases",
                             onProgress: (phase, p) {
                               setDialogState(() {
                                 progress = p;
@@ -297,6 +288,10 @@ class _MainShellState extends ConsumerState<MainShell> {
                                   status = locale == 'fa'
                                       ? 'در حال دریافت بسته به‌روزرسانی (${(p * 100).toInt()}%)'
                                       : 'Downloading update package (${(p * 100).toInt()}%)';
+                                } else if (phase == 'installing') {
+                                  status = locale == 'fa'
+                                      ? 'در حال باز کردن نصب‌کننده اندروید...'
+                                      : 'Opening Android Package Installer...';
                                 } else if (phase == 'extracting') {
                                   status = locale == 'fa' ? 'در حال استخراج فایل‌ها...' : 'Extracting files...';
                                 } else if (phase == 'applying') {
@@ -305,7 +300,9 @@ class _MainShellState extends ConsumerState<MainShell> {
                               });
                             },
                           );
-                          if (!success) {
+                          if (dialogCtx.mounted && Platform.isAndroid && success) {
+                            Navigator.of(dialogCtx).pop();
+                          } else if (!success) {
                             setDialogState(() {
                               downloading = false;
                               status = locale == 'fa' ? 'خطا در اعمال به‌روزرسانی.' : 'Failed to apply update.';
@@ -598,7 +595,6 @@ class _MainShellState extends ConsumerState<MainShell> {
   Widget _buildBottomNavBar(BuildContext context, int bottomNavIndex, String locale, bool hasCdn, String scannerLabel) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final primaryColor = theme.colorScheme.primary;
 
     // Dynamically show the active sub-page icon and label when navigated from drawer
     IconData moreActiveIcon = Icons.grid_view_rounded;
@@ -1715,8 +1711,8 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                                     ? '${outbound.country}${outbound.city != null ? ' (${outbound.city})' : ''}'
                                     : (activeNode?.country != null
                                         ? activeNode!.country!
-                                        : ((activeNode?.countryCode != null && CountryService.getCountryName(activeNode!.countryCode) != null)
-                                            ? CountryService.getCountryName(activeNode!.countryCode)!
+                                        : ((activeNode?.countryCode != null && CountryService.getCountryName(activeNode!.countryCode).isNotEmpty)
+                                            ? CountryService.getCountryName(activeNode!.countryCode)
                                             : (outbound.isLoading
                                                 ? AppStrings.get('fetching_ip', locale: locale)
                                                 : AppStrings.get('unknown_location', locale: locale)))),

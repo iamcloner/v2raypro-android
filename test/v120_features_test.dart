@@ -27,8 +27,8 @@ void main() {
     });
 
     test('UpdateService defaultAppRepoUrl points to iamcloner/v2raypro releases', () {
-      expect(UpdateService.defaultAppRepoUrl, 'https://github.com/iamcloner/v2raypro/releases');
-      expect(UpdateService.defaultAppTestUrl, 'https://github.com/iamcloner/v2raypro/releases');
+      expect(UpdateService.defaultAppRepoUrl, 'https://github.com/iamcloner/v2raypro-android/releases');
+      expect(UpdateService.defaultAppTestUrl, 'https://github.com/iamcloner/v2raypro-android/releases');
     });
 
     test('UpdateService currentAppVersion is v1.0.0', () {

@@ -459,4 +459,84 @@ class StorageService {
       return null;
     }
   }
+
+  static const _activeSessionNodeIdKey = "v2raypro_active_session_node_id";
+  static const _activeSessionConnectedAtKey = "v2raypro_active_session_connected_at";
+  static const _activeSessionIpKey = "v2raypro_active_session_ip";
+  static const _activeSessionCountryKey = "v2raypro_active_session_country";
+  static const _activeSessionCountryCodeKey = "v2raypro_active_session_country_code";
+  static const _activeSessionUplinkKey = "v2raypro_active_session_uplink";
+  static const _activeSessionDownlinkKey = "v2raypro_active_session_downlink";
+
+  Future<void> saveActiveSession({
+    required String nodeId,
+    required DateTime connectedAt,
+    String? exitIp,
+    String? country,
+    String? countryCode,
+    int? uplinkBytes,
+    int? downlinkBytes,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_activeSessionNodeIdKey, nodeId);
+      await prefs.setInt(_activeSessionConnectedAtKey, connectedAt.millisecondsSinceEpoch);
+      if (exitIp != null) await prefs.setString(_activeSessionIpKey, exitIp);
+      if (country != null) await prefs.setString(_activeSessionCountryKey, country);
+      if (countryCode != null) await prefs.setString(_activeSessionCountryCodeKey, countryCode);
+      if (uplinkBytes != null) await prefs.setInt(_activeSessionUplinkKey, uplinkBytes);
+      if (downlinkBytes != null) await prefs.setInt(_activeSessionDownlinkKey, downlinkBytes);
+    } catch (_) {}
+  }
+
+  Future<void> updateActiveSessionTraffic(int uplinkBytes, int downlinkBytes) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_activeSessionUplinkKey, uplinkBytes);
+      await prefs.setInt(_activeSessionDownlinkKey, downlinkBytes);
+    } catch (_) {}
+  }
+
+  Future<void> updateActiveSessionOutbound({String? exitIp, String? country, String? countryCode}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (exitIp != null) await prefs.setString(_activeSessionIpKey, exitIp);
+      if (country != null) await prefs.setString(_activeSessionCountryKey, country);
+      if (countryCode != null) await prefs.setString(_activeSessionCountryCodeKey, countryCode);
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> loadActiveSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final nodeId = prefs.getString(_activeSessionNodeIdKey);
+      final connectedAtMs = prefs.getInt(_activeSessionConnectedAtKey);
+      if (nodeId == null || connectedAtMs == null) return null;
+
+      return {
+        'nodeId': nodeId,
+        'connectedAt': DateTime.fromMillisecondsSinceEpoch(connectedAtMs),
+        'exitIp': prefs.getString(_activeSessionIpKey),
+        'country': prefs.getString(_activeSessionCountryKey),
+        'countryCode': prefs.getString(_activeSessionCountryCodeKey),
+        'uplinkBytes': prefs.getInt(_activeSessionUplinkKey) ?? 0,
+        'downlinkBytes': prefs.getInt(_activeSessionDownlinkKey) ?? 0,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearActiveSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_activeSessionNodeIdKey);
+      await prefs.remove(_activeSessionConnectedAtKey);
+      await prefs.remove(_activeSessionIpKey);
+      await prefs.remove(_activeSessionCountryKey);
+      await prefs.remove(_activeSessionCountryCodeKey);
+      await prefs.remove(_activeSessionUplinkKey);
+      await prefs.remove(_activeSessionDownlinkKey);
+    } catch (_) {}
+  }
 }

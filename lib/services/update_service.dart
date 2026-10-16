@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'xray_process_service.dart';
@@ -514,12 +515,84 @@ class UpdateService {
         : "https://github.com/iamcloner/v2raypro-android/releases";
 
     if (Platform.isAndroid) {
+      final client = _createHttpClient();
       try {
-        final uri = Uri.parse(targetUrl);
-        return await launchUrl(uri, mode: LaunchMode.externalApplication);
+        onProgress?.call("checking", 0.05);
+        if (!targetUrl.toLowerCase().endsWith('.apk') && !targetUrl.contains('/download/')) {
+          final resolved = await checkAppUpdate(customUrl: targetUrl);
+          if (resolved.downloadUrl != null && resolved.downloadUrl!.isNotEmpty) {
+            targetUrl = resolved.downloadUrl!;
+          }
+        }
+
+        final tempDir = await getTemporaryDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final apkFile = File("${tempDir.path}/v2raypro_update_$timestamp.apk");
+
+        onProgress?.call("downloading", 0.10);
+
+        // Follow HTTP redirects (GitHub releases redirect to AWS S3/Azure CDN)
+        HttpClientResponse? res;
+        for (int i = 0; i < 6; i++) {
+          final req = await client.getUrl(Uri.parse(targetUrl));
+          req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.0");
+          req.headers.set(HttpHeaders.acceptHeader, "application/octet-stream,application/vnd.android.package-archive,*/*");
+          req.followRedirects = false;
+          final candidate = await req.close();
+          if (candidate.statusCode == 301 ||
+              candidate.statusCode == 302 ||
+              candidate.statusCode == 303 ||
+              candidate.statusCode == 307 ||
+              candidate.statusCode == 308) {
+            final loc = candidate.headers.value(HttpHeaders.locationHeader);
+            await candidate.drain();
+            if (loc != null) {
+              targetUrl = loc;
+              continue;
+            }
+          }
+          res = candidate;
+          break;
+        }
+
+        if (res == null || res.statusCode != 200) {
+          // Fallback to opening in external browser
+          final uri = Uri.parse(targetUrl);
+          return await launchUrl(uri, mode: LaunchMode.externalApplication);
+        }
+
+        final totalBytes = res.contentLength;
+        int receivedBytes = 0;
+        final sink = apkFile.openWrite();
+
+        await for (final chunk in res) {
+          sink.add(chunk);
+          receivedBytes += chunk.length;
+          if (totalBytes > 0 && onProgress != null) {
+            final p = 0.10 + (receivedBytes / totalBytes) * 0.85;
+            onProgress("downloading", p.clamp(0.0, 0.95));
+          }
+        }
+        await sink.flush();
+        await sink.close();
+
+        onProgress?.call("installing", 1.0);
+
+        const channel = MethodChannel("com.v2raypro.app/native");
+        final bool? success = await channel.invokeMethod<bool>('installApk', {
+          'filePath': apkFile.path,
+        });
+        return success ?? true;
       } catch (e) {
-        debugPrint("downloadAndApplyAppUpdate launchUrl error: $e");
-        return false;
+        debugPrint("downloadAndApplyAppUpdate Android error: $e");
+        try {
+          final uri = Uri.parse(targetUrl);
+          return await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } catch (_) {
+          return false;
+        }
+      } finally {
+        client.close();
       }
     }
 

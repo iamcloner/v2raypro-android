@@ -58,6 +58,16 @@ class XrayProcessService {
   File? _currentConfigFile;
   ProxyNode? _activeRunningNode;
   ProxyNode? get activeRunningNode => _activeRunningNode;
+
+  void setActiveRunningNode(ProxyNode node) {
+    _activeRunningNode = node;
+  }
+
+  void restoreRunningState([ProxyNode? node]) {
+    _state = EngineState.running;
+    if (node != null) _activeRunningNode = node;
+    _startTrafficPolling();
+  }
   int socksPort = 10999;
   int httpPort = 10888;
   int apiPort = 10085;
@@ -371,6 +381,11 @@ class XrayProcessService {
       };
     }
 
+    streamSettings["sockopt"] = {
+      "tcpKeepAliveInterval": 15,
+      "mark": 255,
+    };
+
     Map<String, dynamic> outbound;
     if (node.protocol == ProtocolType.vless) {
       final user = <String, dynamic>{
@@ -542,8 +557,13 @@ class XrayProcessService {
       "policy": {
         "levels": {
           "0": {
+            "handshake": 4,
+            "connIdle": 120,
+            "uplinkOnly": 2,
+            "downlinkOnly": 5,
             "statsUserUplink": true,
-            "statsUserDownlink": true
+            "statsUserDownlink": true,
+            "buffer": 512
           }
         },
         "system": {
