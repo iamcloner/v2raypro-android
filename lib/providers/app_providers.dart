@@ -40,55 +40,71 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
   Future<void> checkExistingConnection() async {
     if (!Platform.isAndroid) return;
     try {
+      final session = await StorageService.instance.loadActiveSession();
       final isRunning = await XrayProcessService.instance.isAndroidVpnRunning();
-      if (isRunning && state != ConnectionStateEnum.connected) {
-        state = ConnectionStateEnum.connected;
-        XrayProcessService.instance.restoreRunningState();
 
-        final session = await StorageService.instance.loadActiveSession();
-        if (session != null) {
-          final connectedAt = session['connectedAt'] as DateTime?;
-          final nodeId = session['nodeId'] as String?;
-          final exitIp = session['exitIp'] as String?;
-          final country = session['country'] as String?;
-          final countryCode = session['countryCode'] as String?;
-          final up = session['uplinkBytes'] as int? ?? 0;
-          final down = session['downlinkBytes'] as int? ?? 0;
+      if (session != null) {
+        final connectedAt = session['connectedAt'] as DateTime?;
+        final nodeId = session['nodeId'] as String?;
+        final exitIp = session['exitIp'] as String?;
+        final country = session['country'] as String?;
+        final countryCode = session['countryCode'] as String?;
+        final up = session['uplinkBytes'] as int? ?? 0;
+        final down = session['downlinkBytes'] as int? ?? 0;
 
-          if (connectedAt != null) {
-            ref.read(connectedAtProvider.notifier).state = connectedAt;
-          } else {
-            ref.read(connectedAtProvider.notifier).state = DateTime.now();
+        // 1. Immediately restore duration so it matches true elapsed time
+        if (connectedAt != null) {
+          ref.read(connectedAtProvider.notifier).state = connectedAt;
+        } else {
+          ref.read(connectedAtProvider.notifier).state = DateTime.now();
+        }
+
+        // 2. Restore cumulative traffic stats baseline
+        ref.read(trafficStatsProvider.notifier).restoreBaseline(up, down);
+
+        // 3. Restore outbound info (exit IP, country, code)
+        if (exitIp != null || countryCode != null) {
+          ref.read(outboundInfoProvider.notifier).setRestored(
+            ipv4: exitIp?.contains('.') == true ? exitIp : null,
+            ipv6: exitIp?.contains(':') == true ? exitIp : null,
+            country: country,
+            countryCode: countryCode,
+          );
+        }
+
+        // 4. Restore active proxy node
+        ProxyNode? active;
+        if (nodeId != null) {
+          ref.read(nodesProvider.notifier).setActive(nodeId);
+          final nodes = ref.read(nodesProvider);
+          active = nodes.where((n) => n.id == nodeId).firstOrNull;
+          if (active != null) {
+            XrayProcessService.instance.setActiveRunningNode(active);
           }
+        }
 
-          if (nodeId != null) {
-            ref.read(nodesProvider.notifier).setActive(nodeId);
-            final nodes = ref.read(nodesProvider);
-            final active = nodes.where((n) => n.id == nodeId).firstOrNull;
-            if (active != null) {
-              XrayProcessService.instance.setActiveRunningNode(active);
-            }
-          }
+        // 5. Restore connection state and ensure Xray core is running
+        if (isRunning || state == ConnectionStateEnum.connected || session != null) {
+          state = ConnectionStateEnum.connected;
+          XrayProcessService.instance.restoreRunningState();
 
-          if (exitIp != null || countryCode != null) {
-            ref.read(outboundInfoProvider.notifier).setRestored(
-              ipv4: exitIp?.contains('.') == true ? exitIp : null,
-              ipv6: exitIp?.contains(':') == true ? exitIp : null,
-              country: country,
-              countryCode: countryCode,
+          if (XrayProcessService.instance.state != EngineState.running && active != null) {
+            await XrayProcessService.instance.start(
+              active,
+              enableTun: true,
+              setSysProxy: false,
+              enableUdp: true,
+              allowLan: false,
             );
           }
 
-          ref.read(trafficStatsProvider.notifier).update(
-            TrafficStats(
-              uplinkBytes: up,
-              downlinkBytes: down,
-            ),
-          );
-        } else {
-          ref.read(connectedAtProvider.notifier).state ??= DateTime.now();
+          ref.read(outboundInfoProvider.notifier).fetch();
+          _testPing();
         }
-
+      } else if (isRunning) {
+        state = ConnectionStateEnum.connected;
+        XrayProcessService.instance.restoreRunningState();
+        ref.read(connectedAtProvider.notifier).state ??= DateTime.now();
         ref.read(outboundInfoProvider.notifier).fetch();
         _testPing();
       }
@@ -237,16 +253,26 @@ final connectionStatusProvider = StateNotifierProvider<ConnectionStatusNotifier,
 class TrafficStatsNotifier extends StateNotifier<TrafficStats> {
   StreamSubscription<TrafficStats>? _sub;
   DateTime? _lastSaveTime;
+  int _baselineUplink = 0;
+  int _baselineDownlink = 0;
 
   TrafficStatsNotifier() : super(const TrafficStats()) {
     _sub = XrayProcessService.instance.trafficStream.listen((stats) {
-      state = stats;
+      final totalUp = _baselineUplink + stats.uplinkBytes;
+      final totalDown = _baselineDownlink + stats.downlinkBytes;
+      state = TrafficStats(uplinkBytes: totalUp, downlinkBytes: totalDown);
       final now = DateTime.now();
-      if (_lastSaveTime == null || now.difference(_lastSaveTime!).inSeconds >= 5) {
+      if (_lastSaveTime == null || now.difference(_lastSaveTime!).inSeconds >= 3) {
         _lastSaveTime = now;
-        StorageService.instance.updateActiveSessionTraffic(stats.uplinkBytes, stats.downlinkBytes);
+        StorageService.instance.updateActiveSessionTraffic(totalUp, totalDown);
       }
     });
+  }
+
+  void restoreBaseline(int up, int down) {
+    _baselineUplink = up;
+    _baselineDownlink = down;
+    state = TrafficStats(uplinkBytes: up, downlinkBytes: down);
   }
 
   void update(TrafficStats stats) {
@@ -254,6 +280,8 @@ class TrafficStatsNotifier extends StateNotifier<TrafficStats> {
   }
 
   void reset() {
+    _baselineUplink = 0;
+    _baselineDownlink = 0;
     state = const TrafficStats();
   }
 

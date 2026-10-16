@@ -374,7 +374,7 @@ class UpdateService {
   static bool isVersionNewer(String latest, String current) {
     final cleanLatest = latest.replaceAll(RegExp(r'[^0-9\.]'), '').trim();
     final cleanCurrent = current.replaceAll(RegExp(r'[^0-9\.]'), '').trim();
-    if (cleanLatest.isEmpty) return false;
+    if (cleanLatest.isEmpty || cleanLatest == cleanCurrent) return false;
     if (cleanCurrent.isEmpty) return true;
 
     final latestParts = cleanLatest.split('.').map((e) => int.tryParse(e) ?? 0).toList();
@@ -452,7 +452,9 @@ class UpdateService {
     }
     fileDownloadUrl ??= "https://github.com/iamcloner/v2raypro-android/releases/download/$tagName/v2raypro-$tagName-android.apk";
 
-    final hasUpdate = isVersionNewer(tagName, currentAppVersion);
+    final cleanTag = tagName.replaceAll(RegExp(r'[^0-9\.]'), '').trim();
+    final cleanCur = currentAppVersion.replaceAll(RegExp(r'[^0-9\.]'), '').trim();
+    final hasUpdate = cleanTag != cleanCur && isVersionNewer(tagName, currentAppVersion);
 
     return UpdateInfo(
       currentVersion: currentAppVersion,

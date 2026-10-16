@@ -547,7 +547,9 @@ class XrayProcessService {
 
     return {
       "log": {
-        "loglevel": Platform.isAndroid ? "none" : "warning",
+        "loglevel": "info",
+        "access": "",
+        "error": "",
       },
       "api": {
         "tag": "api",
@@ -557,8 +559,8 @@ class XrayProcessService {
       "policy": {
         "levels": {
           "0": {
-            "handshake": 4,
-            "connIdle": 120,
+            "handshake": 8,
+            "connIdle": 300,
             "uplinkOnly": 2,
             "downlinkOnly": 5,
             "statsUserUplink": true,

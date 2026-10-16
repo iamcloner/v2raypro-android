@@ -18,7 +18,7 @@ class LogsView extends ConsumerStatefulWidget {
 class _LogsViewState extends ConsumerState<LogsView> {
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  LogLevel? _selectedLevel; // null means 'All'
+  String _selectedCategory = 'all'; // 'all', 'xray', 'system', 'test', 'info', 'warning', 'error', 'access'
   bool _autoScroll = true;
   bool _showLast100Only = true;
   String _searchQuery = "";
@@ -100,11 +100,16 @@ class _LogsViewState extends ConsumerState<LogsView> {
     final locale = ref.watch(currentLocaleProvider);
     final allLogs = ref.watch(logsProvider);
 
-    // Apply filters
+    // Apply category & search filters
     final filteredLogs = allLogs.where((entry) {
-      if (_selectedLevel != null && entry.level != _selectedLevel) {
-        return false;
-      }
+      if (_selectedCategory == 'xray' && entry.source != 'xray') return false;
+      if (_selectedCategory == 'system' && entry.source != 'system') return false;
+      if (_selectedCategory == 'test' && entry.source != 'test') return false;
+      if (_selectedCategory == 'info' && entry.level != LogLevel.info) return false;
+      if (_selectedCategory == 'warning' && entry.level != LogLevel.warning) return false;
+      if (_selectedCategory == 'error' && entry.level != LogLevel.error) return false;
+      if (_selectedCategory == 'access' && entry.level != LogLevel.access) return false;
+
       if (_searchQuery.isNotEmpty) {
         final content = "${entry.message} ${entry.source} ${entry.level.name}".toLowerCase();
         if (!content.contains(_searchQuery)) {
@@ -117,6 +122,16 @@ class _LogsViewState extends ConsumerState<LogsView> {
     final displayedLogs = (_showLast100Only && filteredLogs.length > 100)
         ? filteredLogs.sublist(filteredLogs.length - 100)
         : filteredLogs;
+
+    // Counts for categorized filter badges
+    final totalCount = allLogs.length;
+    final xrayCount = allLogs.where((e) => e.source == 'xray').length;
+    final sysCount = allLogs.where((e) => e.source == 'system').length;
+    final testCount = allLogs.where((e) => e.source == 'test').length;
+    final infoCount = allLogs.where((e) => e.level == LogLevel.info).length;
+    final warnCount = allLogs.where((e) => e.level == LogLevel.warning).length;
+    final errCount = allLogs.where((e) => e.level == LogLevel.error).length;
+    final accessCount = allLogs.where((e) => e.level == LogLevel.access).length;
 
     // Trigger auto-scroll if enabled and new logs arrived
     ref.listen<List<LogEntry>>(logsProvider, (_, __) {
@@ -313,108 +328,167 @@ class _LogsViewState extends ConsumerState<LogsView> {
               const SizedBox(height: 14),
             ],
 
-            // Controls Row: Search Input & Filter Chips
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                // Search box
-                SizedBox(
-                  width: 240,
-                  height: 38,
-                  child: TextField(
-                    controller: _searchController,
-                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface),
-                    decoration: InputDecoration(
-                      hintText: AppStrings.get("search_logs", locale: locale),
-                      hintStyle: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.6)),
-                      prefixIcon: Icon(Icons.search_rounded, size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                      suffixIcon: _searchQuery.isNotEmpty
-                          ? IconButton(
-                              icon: Icon(Icons.clear_rounded, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                              onPressed: () => _searchController.clear(),
-                            )
-                          : null,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
-                      filled: true,
-                      fillColor: Theme.of(context).cardColor,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: Theme.of(context).dividerColor),
+            // 1. Prominent 100 Logs Toggle Card
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.6)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SegmentedButton<bool>(
+                      showSelectedIcon: true,
+                      style: SegmentedButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
                       ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: Theme.of(context).dividerColor),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: AppTheme.primaryAccent),
-                      ),
+                      segments: [
+                        ButtonSegment<bool>(
+                          value: true,
+                          label: Text(
+                            locale == 'fa' ? '۱۰۰ لاگ آخر' : 'Last 100 Logs',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                          icon: const Icon(Icons.filter_1_rounded, size: 16),
+                        ),
+                        ButtonSegment<bool>(
+                          value: false,
+                          label: Text(
+                            locale == 'fa' ? 'تمام لاگ‌ها' : 'All Logs',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                          icon: const Icon(Icons.all_inclusive_rounded, size: 16),
+                        ),
+                      ],
+                      selected: {_showLast100Only},
+                      onSelectionChanged: (set) => setState(() => _showLast100Only = set.first),
                     ),
                   ),
-                ),
-                // Filter Chip: All
-                _buildFilterChip(
-                  label: AppStrings.get("filter_all", locale: locale),
-                  isSelected: _selectedLevel == null,
-                  color: AppTheme.primaryAccent,
-                  onSelected: () => setState(() => _selectedLevel = null),
-                ),
-                // Filter Chip: Info
-                _buildFilterChip(
-                  label: _levelLabel(LogLevel.info, locale),
-                  isSelected: _selectedLevel == LogLevel.info,
-                  color: const Color(0xFF38BDF8),
-                  onSelected: () => setState(() => _selectedLevel = LogLevel.info),
-                ),
-                // Filter Chip: Warning
-                _buildFilterChip(
-                  label: _levelLabel(LogLevel.warning, locale),
-                  isSelected: _selectedLevel == LogLevel.warning,
-                  color: const Color(0xFFFBBF24),
-                  onSelected: () => setState(() => _selectedLevel = LogLevel.warning),
-                ),
-                // Filter Chip: Error
-                _buildFilterChip(
-                  label: _levelLabel(LogLevel.error, locale),
-                  isSelected: _selectedLevel == LogLevel.error,
-                  color: const Color(0xFFF87171),
-                  onSelected: () => setState(() => _selectedLevel = LogLevel.error),
-                ),
-                // Filter Chip: Access
-                _buildFilterChip(
-                  label: _levelLabel(LogLevel.access, locale),
-                  isSelected: _selectedLevel == LogLevel.access,
-                  color: const Color(0xFF34D399),
-                  onSelected: () => setState(() => _selectedLevel = LogLevel.access),
-                ),
-                // Toggle Chip: Last 100 logs only
-                FilterChip(
-                  avatar: Icon(
-                    _showLast100Only ? Icons.filter_1_rounded : Icons.all_inclusive_rounded,
-                    size: 15,
-                    color: _showLast100Only ? Colors.white : Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                  label: Text(
-                    _showLast100Only
-                        ? (locale == 'fa' ? '۱۰۰ لاگ آخر' : 'Last 100 logs')
-                        : (locale == 'fa' ? 'همه لاگ‌ها' : 'All logs'),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: _showLast100Only ? Colors.white : Theme.of(context).colorScheme.onSurfaceVariant,
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _showLast100Only && filteredLogs.length > 100
+                          ? '100 / ${filteredLogs.length}'
+                          : '${filteredLogs.length}',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  selected: _showLast100Only,
-                  selectedColor: AppTheme.primaryAccent,
-                  backgroundColor: Theme.of(context).cardColor,
-                  checkmarkColor: Colors.white,
-                  onSelected: (val) => setState(() => _showLast100Only = val),
-                ),
-              ],
+                ],
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
+
+            // 2. Horizontal Scrollable Category Chips with Counts
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  _buildCategoryChip(
+                    id: 'all',
+                    label: locale == 'fa' ? 'همه' : 'All',
+                    count: totalCount,
+                    color: AppTheme.primaryAccent,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildCategoryChip(
+                    id: 'xray',
+                    label: locale == 'fa' ? 'هسته Xray' : 'Xray Core',
+                    count: xrayCount,
+                    color: Colors.cyanAccent,
+                  ),
+                  const SizedBox(width: 6),
+                  _buildCategoryChip(
+                    id: 'system',
+                    label: locale == 'fa' ? 'سیستم' : 'System',
+                    count: sysCount,
+                    color: Colors.purpleAccent,
+                  ),
+                  if (testCount > 0) ...[
+                    const SizedBox(width: 6),
+                    _buildCategoryChip(
+                      id: 'test',
+                      label: locale == 'fa' ? 'تست تاخیر' : 'Delay Test',
+                      count: testCount,
+                      color: Colors.amberAccent,
+                    ),
+                  ],
+                  const SizedBox(width: 6),
+                  _buildCategoryChip(
+                    id: 'info',
+                    label: locale == 'fa' ? 'اطلاعات' : 'Info',
+                    count: infoCount,
+                    color: const Color(0xFF38BDF8),
+                  ),
+                  const SizedBox(width: 6),
+                  _buildCategoryChip(
+                    id: 'warning',
+                    label: locale == 'fa' ? 'هشدار' : 'Warning',
+                    count: warnCount,
+                    color: const Color(0xFFFBBF24),
+                  ),
+                  const SizedBox(width: 6),
+                  _buildCategoryChip(
+                    id: 'error',
+                    label: locale == 'fa' ? 'خطا' : 'Error',
+                    count: errCount,
+                    color: const Color(0xFFF87171),
+                  ),
+                  const SizedBox(width: 6),
+                  _buildCategoryChip(
+                    id: 'access',
+                    label: locale == 'fa' ? 'شبکه' : 'Access',
+                    count: accessCount,
+                    color: const Color(0xFF34D399),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // 3. Full-width Search Input
+            SizedBox(
+              height: 38,
+              child: TextField(
+                controller: _searchController,
+                style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface),
+                decoration: InputDecoration(
+                  hintText: locale == 'fa' ? 'جستجو در لاگ‌ها...' : 'Search logs...',
+                  hintStyle: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.6)),
+                  prefixIcon: Icon(Icons.search_rounded, size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: Icon(Icons.clear_rounded, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                          onPressed: () => _searchController.clear(),
+                        )
+                      : null,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
+                  filled: true,
+                  fillColor: Theme.of(context).cardColor,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Theme.of(context).dividerColor),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Theme.of(context).dividerColor),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: AppTheme.primaryAccent),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
 
             // Main Terminal Console Area
             Expanded(
@@ -433,7 +507,7 @@ class _LogsViewState extends ConsumerState<LogsView> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
-                                _searchQuery.isNotEmpty || _selectedLevel != null
+                                _searchQuery.isNotEmpty || _selectedCategory != 'all'
                                     ? Icons.search_off_rounded
                                     : Icons.receipt_long_rounded,
                                 size: 48,
@@ -441,7 +515,7 @@ class _LogsViewState extends ConsumerState<LogsView> {
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                _searchQuery.isNotEmpty || _selectedLevel != null
+                                _searchQuery.isNotEmpty || _selectedCategory != 'all'
                                     ? AppStrings.get("no_matching_logs", locale: locale)
                                     : AppStrings.get("no_logs", locale: locale),
                                 style: TextStyle(
@@ -514,6 +588,64 @@ class _LogsViewState extends ConsumerState<LogsView> {
                             },
                           ),
                         ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCategoryChip({
+    required String id,
+    required String label,
+    required int count,
+    required Color color,
+  }) {
+    final isSelected = _selectedCategory == id;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      onTap: () => setState(() => _selectedCategory = id),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? color.withValues(alpha: 0.22)
+              : (isDark ? const Color(0xFF161C28) : Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5)),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? color : Theme.of(context).dividerColor.withValues(alpha: 0.5),
+            width: isSelected ? 1.4 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                color: isSelected ? color : Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? color.withValues(alpha: 0.35)
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: isSelected ? Colors.white : Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
             ),

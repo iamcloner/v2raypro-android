@@ -151,6 +151,7 @@ class _MainShellState extends ConsumerState<MainShell> {
       };
       ref.read(connectionStatusProvider.notifier).checkExistingConnection();
       const MethodChannel('com.v2raypro.app/native').invokeMethod('requestNotificationPermission');
+      const MethodChannel('com.v2raypro.app/native').invokeMethod('requestIgnoreBatteryOptimizations');
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAutoConnect();
@@ -172,14 +173,15 @@ class _MainShellState extends ConsumerState<MainShell> {
 
   Future<void> _checkStartupUpdate() async {
     // Wait briefly so UI mounts smoothly and startup connects if needed
-    await Future.delayed(const Duration(seconds: 3));
+    await Future.delayed(const Duration(seconds: 4));
     if (!mounted) return;
 
     try {
       final info = await UpdateService.instance.checkAppUpdate();
       if (!mounted) return;
 
-      if (info.hasUpdate) {
+      final isActuallyNewer = info.hasUpdate && UpdateService.isVersionNewer(info.latestVersion, info.currentVersion);
+      if (isActuallyNewer) {
         final locale = ref.read(currentLocaleProvider);
         try {
           final notification = LocalNotification(
