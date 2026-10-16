@@ -1,6 +1,7 @@
 import "dart:async";
 import "dart:convert";
 import "dart:io";
+import "package:flutter/services.dart";
 import "package:path_provider/path_provider.dart";
 import "../models/log_entry.dart";
 
@@ -91,6 +92,11 @@ class LogService {
   Future<void> clear() async {
     _entries.clear();
     _saveDebounceTimer?.cancel();
+    if (Platform.isAndroid) {
+      try {
+        const MethodChannel('com.v2raypro.app/native').invokeMethod('clearVpnLogs');
+      } catch (_) {}
+    }
     try {
       if (_logFile != null && await _logFile!.exists()) {
         await _logFile!.delete();

@@ -20,6 +20,7 @@ class V2RayVpnService : VpnService() {
         const val ACTION_START = "com.v2raypro.app.VPN_START"
         const val ACTION_STOP = "com.v2raypro.app.VPN_STOP"
         const val ACTION_DISCONNECT = "com.v2raypro.app.VPN_DISCONNECT"
+        const val ACTION_VPN_DISCONNECTED = "com.v2raypro.app.VPN_DISCONNECTED"
         const val CHANNEL_ID = "v2raypro_vpn_channel"
         const val NOTIFICATION_ID = 1001
 
@@ -32,12 +33,22 @@ class V2RayVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+    private var xrayProcess: java.lang.Process? = null
+    private val logLock = Any()
 
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             stopVpn()
-            onDisconnectListener?.invoke()
+            notifyDisconnected()
         }
+    }
+
+    private fun notifyDisconnected() {
+        onDisconnectListener?.invoke()
+        try {
+            val notifyIntent = Intent(ACTION_VPN_DISCONNECTED).setPackage(packageName)
+            sendBroadcast(notifyIntent)
+        } catch (_: Exception) {}
     }
 
     override fun onCreate() {
@@ -57,7 +68,7 @@ class V2RayVpnService : VpnService() {
         if (action == ACTION_STOP || action == ACTION_DISCONNECT) {
             stopVpn()
             if (action == ACTION_DISCONNECT) {
-                onDisconnectListener?.invoke()
+                notifyDisconnected()
             }
             return START_NOT_STICKY
         }
@@ -71,8 +82,23 @@ class V2RayVpnService : VpnService() {
             val disconnectText = intent.getStringExtra("disconnectText") ?: "قطع اتصال"
             val appRoutingMode = intent.getStringExtra("appRoutingMode") ?: "exclusive"
             val appRoutingList = intent.getStringArrayListExtra("appRoutingList") ?: arrayListOf<String>()
+            val xrayBinary = intent.getStringExtra("xrayBinary") ?: ""
+            val configPath = intent.getStringExtra("configPath") ?: ""
+            val assetDir = intent.getStringExtra("assetDir") ?: ""
 
-            startVpn(configName, httpPort, socksPort, isTun, notificationTitle, disconnectText, appRoutingMode, appRoutingList)
+            startVpn(
+                configName,
+                httpPort,
+                socksPort,
+                isTun,
+                notificationTitle,
+                disconnectText,
+                appRoutingMode,
+                appRoutingList,
+                xrayBinary,
+                configPath,
+                assetDir
+            )
             return START_STICKY
         }
 
@@ -128,6 +154,60 @@ class V2RayVpnService : VpnService() {
             .build()
     }
 
+    private fun startXray(xrayBinary: String, configPath: String, assetDir: String) {
+        stopXray()
+        if (xrayBinary.isEmpty() || configPath.isEmpty()) return
+
+        try {
+            val pb = ProcessBuilder(xrayBinary, "run", "-c", configPath)
+            if (assetDir.isNotEmpty() && java.io.File(assetDir).exists()) {
+                pb.directory(java.io.File(assetDir))
+                pb.environment()["XRAY_LOCATION_ASSET"] = assetDir
+            }
+            pb.redirectErrorStream(true)
+            val proc = pb.start()
+            xrayProcess = proc
+
+            Thread {
+                try {
+                    val logFile = java.io.File(cacheDir, "xray.log")
+                    proc.inputStream.bufferedReader().use { reader ->
+                        var line: String? = reader.readLine()
+                        while (proc.isAlive && line != null) {
+                            val textToLog = line
+                            synchronized(logLock) {
+                                try {
+                                    if (logFile.exists() && logFile.length() > 500 * 1024) {
+                                        val lines = logFile.readLines()
+                                        val keep = if (lines.size > 200) lines.takeLast(200) else lines
+                                        logFile.writeText(keep.joinToString("\n") + "\n")
+                                    }
+                                    logFile.appendText(textToLog + "\n")
+                                } catch (_: Exception) {}
+                            }
+                            line = reader.readLine()
+                        }
+                    }
+                } catch (_: Exception) {}
+            }.start()
+
+            // Wait 300ms to ensure process starts cleanly
+            Thread.sleep(300)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun stopXray() {
+        try {
+            xrayProcess?.destroy()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                xrayProcess?.destroyForcibly()
+            }
+        } catch (_: Exception) {}
+        xrayProcess = null
+    }
+
     private fun startVpn(
         configName: String,
         httpPort: Int,
@@ -136,7 +216,10 @@ class V2RayVpnService : VpnService() {
         notificationTitle: String,
         disconnectText: String,
         appRoutingMode: String = "exclusive",
-        appRoutingList: ArrayList<String> = arrayListOf()
+        appRoutingList: ArrayList<String> = arrayListOf(),
+        xrayBinary: String = "",
+        configPath: String = "",
+        assetDir: String = ""
     ) {
         val notification = createNotification(configName, notificationTitle, disconnectText)
         startForeground(NOTIFICATION_ID, notification)
@@ -150,6 +233,10 @@ class V2RayVpnService : VpnService() {
             wifiLock = wm?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "V2RayPro:WifiLock")
             wifiLock?.acquire()
         } catch (_: Exception) {}
+
+        if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
+            startXray(xrayBinary, configPath, assetDir)
+        }
 
         if (isTun) {
             try {
@@ -223,10 +310,24 @@ misc:
             vpnInterface = null
             isRunning = true
         }
+
+        if (isRunning) {
+            try {
+                val flagFile = java.io.File(cacheDir, "vpn_running.flag")
+                flagFile.writeText("${android.os.Process.myPid()}")
+            } catch (_: Exception) {}
+        }
     }
 
     private fun stopVpn() {
         isRunning = false
+        try {
+            val flagFile = java.io.File(cacheDir, "vpn_running.flag")
+            if (flagFile.exists()) flagFile.delete()
+        } catch (_: Exception) {}
+
+        stopXray()
+
         try {
             hev.htproxy.TProxyService.TProxyStopService()
         } catch (_: Exception) {}
@@ -274,7 +375,7 @@ misc:
 
     override fun onRevoke() {
         stopVpn()
-        onDisconnectListener?.invoke()
+        notifyDisconnected()
         super.onRevoke()
     }
 }

@@ -2,6 +2,7 @@ package com.v2raypro.app
 
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
@@ -30,6 +31,17 @@ class MainActivity : FlutterActivity() {
     private var pendingDisconnectText: String = "قطع اتصال"
     private var pendingAppRoutingMode: String = "exclusive"
     private var pendingAppRoutingList: ArrayList<String> = arrayListOf()
+    private var pendingXrayBinary: String = ""
+    private var pendingConfigPath: String = ""
+    private var pendingAssetDir: String = ""
+
+    private val vpnBroadcastReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            runOnUiThread {
+                methodChannel?.invokeMethod("onDisconnectedFromNotification", null)
+            }
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -41,6 +53,15 @@ class MainActivity : FlutterActivity() {
                 channel.invokeMethod("onDisconnectedFromNotification", null)
             }
         }
+
+        try {
+            val filter = IntentFilter("com.v2raypro.app.VPN_DISCONNECTED")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(vpnBroadcastReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(vpnBroadcastReceiver, filter)
+            }
+        } catch (_: Exception) {}
 
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -78,7 +99,9 @@ class MainActivity : FlutterActivity() {
                 "isAnotherVpnActive" -> {
                     val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                     var hasOtherVpn = false
-                    if (!V2RayVpnService.isRunning) {
+                    val flagFile = File(cacheDir, "vpn_running.flag")
+                    val isOurVpnActive = flagFile.exists() || V2RayVpnService.isRunning
+                    if (!isOurVpnActive) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                             val activeNetwork = cm.activeNetwork
                             val caps = cm.getNetworkCapabilities(activeNetwork)
@@ -98,7 +121,49 @@ class MainActivity : FlutterActivity() {
                     result.success(hasOtherVpn)
                 }
                 "isVpnRunning" -> {
-                    result.success(V2RayVpnService.isRunning)
+                    val flagFile = File(cacheDir, "vpn_running.flag")
+                    var running = false
+                    if (flagFile.exists()) {
+                        try {
+                            val pidStr = flagFile.readText().trim()
+                            val pid = pidStr.toIntOrNull()
+                            if (pid != null && File("/proc/$pid").exists()) {
+                                running = true
+                            } else if (V2RayVpnService.isRunning) {
+                                running = true
+                            } else {
+                                flagFile.delete()
+                            }
+                        } catch (_: Exception) {
+                            running = V2RayVpnService.isRunning
+                        }
+                    } else {
+                        running = V2RayVpnService.isRunning
+                    }
+                    result.success(running)
+                }
+                "getRecentVpnLogs" -> {
+                    val logFile = File(cacheDir, "xray.log")
+                    if (logFile.exists()) {
+                        try {
+                            val lines = logFile.readLines()
+                            val recent = if (lines.size > 200) lines.takeLast(200) else lines
+                            result.success(recent)
+                        } catch (e: Exception) {
+                            result.success(listOf<String>())
+                        }
+                    } else {
+                        result.success(listOf<String>())
+                    }
+                }
+                "clearVpnLogs" -> {
+                    val logFile = File(cacheDir, "xray.log")
+                    try {
+                        if (logFile.exists()) logFile.delete()
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
                 }
                 "startVpnService" -> {
                     val configName = call.argument<String>("configName") ?: "V2RayPro"
@@ -109,6 +174,9 @@ class MainActivity : FlutterActivity() {
                     val disconnectText = call.argument<String>("disconnectText") ?: "قطع اتصال"
                     val appRoutingMode = call.argument<String>("appRoutingMode") ?: "exclusive"
                     val appRoutingList = call.argument<ArrayList<String>>("appRoutingList") ?: arrayListOf<String>()
+                    val xrayBinary = call.argument<String>("xrayBinary") ?: ""
+                    val configPath = call.argument<String>("configPath") ?: ""
+                    val assetDir = call.argument<String>("assetDir") ?: ""
 
                     if (isTun) {
                         val prepareIntent = VpnService.prepare(this)
@@ -122,14 +190,41 @@ class MainActivity : FlutterActivity() {
                             pendingDisconnectText = disconnectText
                             pendingAppRoutingMode = appRoutingMode
                             pendingAppRoutingList = appRoutingList
+                            pendingXrayBinary = xrayBinary
+                            pendingConfigPath = configPath
+                            pendingAssetDir = assetDir
                             startActivityForResult(prepareIntent, VPN_REQUEST_CODE)
                         } else {
-                            launchVpnService(configName, httpPort, socksPort, isTun, notificationTitle, disconnectText, appRoutingMode, appRoutingList)
+                            launchVpnService(
+                                configName,
+                                httpPort,
+                                socksPort,
+                                isTun,
+                                notificationTitle,
+                                disconnectText,
+                                appRoutingMode,
+                                appRoutingList,
+                                xrayBinary,
+                                configPath,
+                                assetDir
+                            )
                             result.success(true)
                         }
                     } else {
                         // Proxy Mode: No VPN interface needed, start purely as foreground service
-                        launchVpnService(configName, httpPort, socksPort, false, notificationTitle, disconnectText, appRoutingMode, appRoutingList)
+                        launchVpnService(
+                            configName,
+                            httpPort,
+                            socksPort,
+                            false,
+                            notificationTitle,
+                            disconnectText,
+                            appRoutingMode,
+                            appRoutingList,
+                            xrayBinary,
+                            configPath,
+                            assetDir
+                        )
                         result.success(true)
                     }
                 }
@@ -228,7 +323,10 @@ class MainActivity : FlutterActivity() {
         notificationTitle: String,
         disconnectText: String,
         appRoutingMode: String = "exclusive",
-        appRoutingList: ArrayList<String> = arrayListOf()
+        appRoutingList: ArrayList<String> = arrayListOf(),
+        xrayBinary: String = "",
+        configPath: String = "",
+        assetDir: String = ""
     ) {
         val startIntent = Intent(this, V2RayVpnService::class.java).apply {
             action = V2RayVpnService.ACTION_START
@@ -240,6 +338,9 @@ class MainActivity : FlutterActivity() {
             putExtra("disconnectText", disconnectText)
             putExtra("appRoutingMode", appRoutingMode)
             putStringArrayListExtra("appRoutingList", appRoutingList)
+            putExtra("xrayBinary", xrayBinary)
+            putExtra("configPath", configPath)
+            putExtra("assetDir", assetDir)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(startIntent)
@@ -260,7 +361,10 @@ class MainActivity : FlutterActivity() {
                     pendingNotificationTitle,
                     pendingDisconnectText,
                     pendingAppRoutingMode,
-                    pendingAppRoutingList
+                    pendingAppRoutingList,
+                    pendingXrayBinary,
+                    pendingConfigPath,
+                    pendingAssetDir
                 )
                 pendingVpnResult?.success(true)
             } else {
@@ -268,5 +372,12 @@ class MainActivity : FlutterActivity() {
             }
             pendingVpnResult = null
         }
+    }
+
+    override fun onDestroy() {
+        try {
+            unregisterReceiver(vpnBroadcastReceiver)
+        } catch (_: Exception) {}
+        super.onDestroy()
     }
 }

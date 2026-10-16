@@ -222,6 +222,37 @@ class XrayProcessService {
     }
   }
 
+  final Set<String> _syncedAndroidLogSet = <String>{};
+
+  Future<void> syncAndroidLogs() async {
+    if (!Platform.isAndroid) return;
+    try {
+      const channel = MethodChannel('com.v2raypro.app/native');
+      final lines = await channel.invokeMethod<List<dynamic>>('getRecentVpnLogs');
+      if (lines != null && lines.isNotEmpty) {
+        for (final item in lines) {
+          final line = item.toString().trim();
+          if (line.isNotEmpty && !_syncedAndroidLogSet.contains(line)) {
+            _syncedAndroidLogSet.add(line);
+            if (_syncedAndroidLogSet.length > 2000) {
+              _syncedAndroidLogSet.clear();
+            }
+            LogService.instance.addFromRawLine(line, source: "xray");
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> clearAndroidVpnLogs() async {
+    if (!Platform.isAndroid) return;
+    try {
+      _syncedAndroidLogSet.clear();
+      const channel = MethodChannel('com.v2raypro.app/native');
+      await channel.invokeMethod('clearVpnLogs');
+    } catch (_) {}
+  }
+
   String _getWorkingDirectory(String binaryPath) {
     if (Platform.isAndroid && _androidAssetDir != null) {
       return _androidAssetDir!.path;
@@ -730,55 +761,6 @@ class XrayProcessService {
       _currentConfigFile = File("${tmpDir.path}/v2raypro_active_config.json");
       await _currentConfigFile!.writeAsString(jsonEncode(configJson));
 
-      final workDir = _getWorkingDirectory(binaryPath);
-      final env = _getXrayEnvironment();
-
-      _process = await Process.start(
-        binaryPath,
-        ["run", "-c", _currentConfigFile!.path],
-        workingDirectory: workDir,
-        environment: env,
-        mode: ProcessStartMode.normal,
-      );
-
-      bool processExitedEarly = false;
-      int? earlyExitCode;
-      final capturedLines = <String>[];
-
-      _process!.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
-        lastLog = line;
-        capturedLines.add(line);
-        LogService.instance.addFromRawLine(line, source: "xray");
-      }, onError: (_) {});
-      _process!.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
-        lastErrorLog = line;
-        capturedLines.add(line);
-        LogService.instance.addFromRawLine(line, source: "xray");
-      }, onError: (_) {});
-
-      _process!.exitCode.then((code) {
-        if (_state == EngineState.starting) {
-          processExitedEarly = true;
-          earlyExitCode = code;
-          _state = EngineState.error;
-        } else if (_state == EngineState.running) {
-          _state = EngineState.stopped;
-        }
-        final level = code == 0 ? LogLevel.info : LogLevel.error;
-        LogService.instance.add("Xray core exited with code $code", level: level, source: "xray");
-      });
-
-      // Allow 400ms to verify process initialized and did not immediately crash
-      await Future.delayed(const Duration(milliseconds: 400));
-      if (processExitedEarly || _state != EngineState.starting) {
-        _state = EngineState.error;
-        final errorMsg = capturedLines.isNotEmpty
-            ? capturedLines.last
-            : "Process terminated unexpectedly with exit code $earlyExitCode";
-        LogService.instance.add("Xray failed to initialize: $errorMsg", level: LogLevel.error, source: "system");
-        return false;
-      }
-
       if (Platform.isAndroid) {
         final appRules = routingRules
             .where((r) => r.type == RoutingRuleType.app && r.enabled)
@@ -801,16 +783,64 @@ class XrayProcessService {
         );
 
         if (!started) {
-          _process?.kill();
-          _process = null;
           _state = EngineState.error;
           LogService.instance.add("Failed to start Android VPN service.", level: LogLevel.error, source: "system");
           return false;
         }
 
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(const Duration(milliseconds: 300));
+        syncAndroidLogs();
       } else {
         // Windows Desktop
+        final workDir = _getWorkingDirectory(binaryPath);
+        final env = _getXrayEnvironment();
+
+        _process = await Process.start(
+          binaryPath,
+          ["run", "-c", _currentConfigFile!.path],
+          workingDirectory: workDir,
+          environment: env,
+          mode: ProcessStartMode.normal,
+        );
+
+        bool processExitedEarly = false;
+        int? earlyExitCode;
+        final capturedLines = <String>[];
+
+        _process!.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+          lastLog = line;
+          capturedLines.add(line);
+          LogService.instance.addFromRawLine(line, source: "xray");
+        }, onError: (_) {});
+        _process!.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+          lastErrorLog = line;
+          capturedLines.add(line);
+          LogService.instance.addFromRawLine(line, source: "xray");
+        }, onError: (_) {});
+
+        _process!.exitCode.then((code) {
+          if (_state == EngineState.starting) {
+            processExitedEarly = true;
+            earlyExitCode = code;
+            _state = EngineState.error;
+          } else if (_state == EngineState.running) {
+            _state = EngineState.stopped;
+          }
+          final level = code == 0 ? LogLevel.info : LogLevel.error;
+          LogService.instance.add("Xray core exited with code $code", level: level, source: "xray");
+        });
+
+        // Allow 400ms to verify process initialized and did not immediately crash
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (processExitedEarly || _state != EngineState.starting) {
+          _state = EngineState.error;
+          final errorMsg = capturedLines.isNotEmpty
+              ? capturedLines.last
+              : "Process terminated unexpectedly with exit code $earlyExitCode";
+          LogService.instance.add("Xray failed to initialize: $errorMsg", level: LogLevel.error, source: "system");
+          return false;
+        }
+
         if (setSysProxy) {
           setWindowsSystemProxy(true);
         }
@@ -998,6 +1028,9 @@ class XrayProcessService {
             _currentTrafficStats = TrafficStats(downlinkBytes: downlink, uplinkBytes: uplink);
             _trafficStreamController.add(_currentTrafficStats);
           }
+        }
+        if (Platform.isAndroid && DateTime.now().second % 2 == 0) {
+          syncAndroidLogs();
         }
       } catch (_) {}
     });
