@@ -27,7 +27,7 @@ class UpdateService {
   static final UpdateService instance = UpdateService._internal();
   UpdateService._internal();
 
-  static const String _defaultFallbackVersion = "v1.0.1";
+  static const String _defaultFallbackVersion = "v1.1.1";
   static String? _cachedCurrentVersion;
 
   /// Read current app version dynamically from version.ini
@@ -474,7 +474,7 @@ class UpdateService {
     final repo = "iamcloner/v2raypro-android";
     try {
       final reqLatest = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases/latest"));
-      reqLatest.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.1");
+      reqLatest.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/$currentAppVersion");
       reqLatest.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
       final resLatest = await reqLatest.close().timeout(const Duration(seconds: 10));
       if (resLatest.statusCode == 200) {
@@ -485,7 +485,7 @@ class UpdateService {
 
       // Fallback to releases list
       final req = await client.getUrl(Uri.parse("https://api.github.com/repos/$repo/releases?per_page=5"));
-      req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.1");
+      req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/$currentAppVersion");
       req.headers.set(HttpHeaders.acceptHeader, "application/vnd.github.v3+json");
       final res = await req.close().timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
@@ -537,7 +537,7 @@ class UpdateService {
         HttpClientResponse? res;
         for (int i = 0; i < 6; i++) {
           final req = await client.getUrl(Uri.parse(targetUrl));
-          req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/1.0.1");
+          req.headers.set(HttpHeaders.userAgentHeader, "V2RayPro-Android/$currentAppVersion");
           req.headers.set(HttpHeaders.acceptHeader, "application/octet-stream,application/vnd.android.package-archive,*/*");
           req.followRedirects = false;
           final candidate = await req.close();
