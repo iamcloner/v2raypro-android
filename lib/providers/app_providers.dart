@@ -205,6 +205,9 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
       return;
     }
 
+    final httpPort = ref.read(httpPortProvider);
+    final socksPort = ref.read(socksPortProvider);
+
     state = ConnectionStateEnum.connecting;
     final ok = await XrayProcessService.instance.start(
       activeNode,
@@ -214,6 +217,8 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
       allowLan: allowLan,
       notificationTitle: notificationTitle,
       disconnectText: disconnectText,
+      httpPort: httpPort,
+      socksPort: socksPort,
     );
     if (ok) {
       setConnected();

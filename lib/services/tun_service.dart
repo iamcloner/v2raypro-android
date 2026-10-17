@@ -16,8 +16,8 @@ class TunService {
   TunStatus get status => _status;
   bool get isConnected => _status == TunStatus.connect;
 
-  int _currentSocksPort = 10808;
-  int _currentHttpPort = 10809;
+  int _currentSocksPort = 10999;
+  int _currentHttpPort = 10888;
   int get socksPort => _currentSocksPort;
   int get httpPort => _currentHttpPort;
 
@@ -128,8 +128,9 @@ class TunService {
     String? assetDir,
   }) async {
     try {
-      final res = await _androidChannel.invokeMethod<bool>('startVpn', {
-        'nodeName': 'V2RayPro',
+      final payload = {
+        'configName': notificationTitle ?? 'V2RayPro',
+        'nodeName': notificationTitle ?? 'V2RayPro',
         'isTun': true,
         'socksPort': socksPort,
         'httpPort': httpPort,
@@ -140,7 +141,14 @@ class TunService {
         if (xrayBinary != null) 'xrayBinary': xrayBinary,
         if (configPath != null) 'configPath': configPath,
         if (assetDir != null) 'assetDir': assetDir,
-      });
+      };
+
+      bool? res;
+      try {
+        res = await _androidChannel.invokeMethod<bool>('startVpnService', payload);
+      } catch (_) {
+        res = await _androidChannel.invokeMethod<bool>('startVpn', payload);
+      }
 
       final started = res ?? false;
       if (started) {
@@ -155,8 +163,12 @@ class TunService {
 
   Future<void> _stopAndroidTun() async {
     try {
-      await _androidChannel.invokeMethod('stopVpn');
-    } catch (_) {}
+      await _androidChannel.invokeMethod('stopVpnService');
+    } catch (_) {
+      try {
+        await _androidChannel.invokeMethod('stopVpn');
+      } catch (_) {}
+    }
   }
 
   final Set<String> _syncedAndroidLogSet = <String>{};

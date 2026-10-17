@@ -194,8 +194,8 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                 }
-                "startVpnService" -> {
-                    val configName = call.argument<String>("configName") ?: "V2RayPro"
+                "startVpnService", "startVpn" -> {
+                    val configName = call.argument<String>("configName") ?: call.argument<String>("nodeName") ?: "V2RayPro"
                     val httpPort = call.argument<Int>("httpPort") ?: 10888
                     val socksPort = call.argument<Int>("socksPort") ?: 10999
                     val isTun = call.argument<Boolean>("isTun") ?: true
@@ -257,7 +257,7 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                 }
-                "stopVpnService" -> {
+                "stopVpnService", "stopVpn" -> {
                     val stopIntent = Intent(this, V2RayVpnService::class.java).apply {
                         action = V2RayVpnService.ACTION_STOP
                     }
@@ -383,7 +383,7 @@ class MainActivity : FlutterActivity() {
         if (requestCode == VPN_REQUEST_CODE) {
             if (resultCode == RESULT_OK) {
                 // If this preparation was triggered as part of a pending start request, launch the service
-                if (pendingConfigPath.isNotEmpty()) {
+                if (pendingConfigPath.isNotEmpty() || pendingConfigName.isNotEmpty()) {
                     window.decorView.postDelayed({
                         launchVpnService(
                             pendingConfigName,
