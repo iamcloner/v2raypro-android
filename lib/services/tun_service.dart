@@ -159,6 +159,41 @@ class TunService {
     } catch (_) {}
   }
 
+  final Set<String> _syncedAndroidLogSet = <String>{};
+
+  Future<bool> prepareAndroidVpn() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final res = await _androidChannel.invokeMethod<bool>('prepareVpn');
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> syncAndroidLogs() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final lines = await _androidChannel.invokeMethod<List<dynamic>>('getRecentVpnLogs');
+      if (lines != null && lines.isNotEmpty) {
+        for (final raw in lines) {
+          final line = raw.toString().trim();
+          if (line.isNotEmpty && !_syncedAndroidLogSet.contains(line)) {
+            _syncedAndroidLogSet.add(line);
+            LogLevel lvl = LogLevel.info;
+            final lwr = line.toLowerCase();
+            if (lwr.contains("error") || lwr.contains("failed") || lwr.contains("fatal")) {
+              lvl = LogLevel.error;
+            } else if (lwr.contains("warn")) {
+              lvl = LogLevel.warning;
+            }
+            LogService.instance.add(line, level: lvl, source: "android-vpn");
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<bool> isVpnActive() async {
     if (!Platform.isAndroid) return isConnected;
     try {
@@ -168,6 +203,7 @@ class TunService {
       return false;
     }
   }
+
 
   // ========================================================
   // Windows-specific implementation
