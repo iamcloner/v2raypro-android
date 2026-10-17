@@ -117,6 +117,7 @@ class PingService {
       sw.stop();
       if (res.exitCode == 0) {
         final out = res.stdout.toString();
+        // Extract time from output
         final match = RegExp(r"(?:time|زمان)[=< ]*(\d+(?:\.\d+)?)ms", caseSensitive: false).firstMatch(out);
         if (match != null) {
           final t = double.tryParse(match.group(1)!);
@@ -164,6 +165,7 @@ class PingService {
     String? workingDirectory,
     Map<String, String>? environment,
   }) async {
+    // 1. Connect temporary to config or direct probe
     int? latency;
     String? countryCode;
     String? countryName;
@@ -195,6 +197,7 @@ class PingService {
         client.findProxy = (uri) => "PROXY 127.0.0.1:$tempPort";
         client.connectionTimeout = timeout;
 
+        // 2. Take a ping (ping type) through the temporary connection
         latency = await _measureRealDelayThroughProxy(
           client: client,
           destination: destination,
@@ -203,15 +206,42 @@ class PingService {
           timeout: timeout,
         );
 
-        if (showCountry && latency != null) {
-          final ipInfo = await _fetchExitIpInfo(client, timeout: timeout);
-          countryCode = ipInfo.countryCode;
-          countryName = ipInfo.countryName;
-          exitIp = ipInfo.exitIp;
+        // Fallback: If proxy measurement timed out, try strict protocol probe
+        if (latency == null && config.node != null) {
+          latency = await _probeNodeDirectly(config.node!, timeout);
+        }
+
+        // 3. If Show_country == true -> Send HTTP request and get IP info
+        if (showCountry) {
+          if (latency != null) {
+            final ipInfo = await _fetchExitIpInfo(client, timeout: timeout);
+            countryCode = ipInfo.countryCode;
+            countryName = ipInfo.countryName;
+            exitIp = ipInfo.exitIp;
+          }
+          if (countryCode == null && config.node != null) {
+            final loc = LocalGeoIp.instance.lookup(config.node!.address);
+            if (loc != null) {
+              countryCode = loc;
+              countryName = CountryService.getCountryName(loc);
+            }
+          }
         }
       } catch (e) {
-        return PingResult.failure(e.toString());
+        if (config.node != null) {
+          latency = await _probeNodeDirectly(config.node!, timeout);
+          if (showCountry && latency != null) {
+            final loc = LocalGeoIp.instance.lookup(config.node!.address);
+            if (loc != null) {
+              countryCode = loc;
+              countryName = CountryService.getCountryName(loc);
+            }
+          }
+        } else {
+          return PingResult.failure(e.toString());
+        }
       } finally {
+        // 4. Disconnect temporary connection
         await tempProxy?.dispose();
       }
     }
@@ -298,13 +328,17 @@ class PingService {
           node.network == NetworkType.splithttp;
 
       if (isHttpTransport) {
-        final path = (node.path == null || node.path!.isEmpty)
+        final path = (node.path == null || node.path!.trim().isEmpty)
             ? '/'
-            : (node.path!.startsWith('/') ? node.path! : '/${node.path}');
+            : (node.path!.trim().startsWith('/') ? node.path!.trim() : '/${node.path!.trim()}');
+
+        final hostHeader = (node.host != null && node.host!.trim().isNotEmpty)
+            ? node.host!.trim()
+            : sni;
 
         final httpRequest =
             'GET $path HTTP/1.1\r\n'
-            'Host: ${node.host ?? sni}\r\n'
+            'Host: $hostHeader\r\n'
             'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n'
             'Upgrade: websocket\r\n'
             'Connection: Upgrade\r\n'
@@ -334,8 +368,7 @@ class PingService {
                 respStr.contains('Error 1000') ||
                 respStr.contains('Error 1005') ||
                 respStr.contains('Error 1020') ||
-                respStr.contains('<html') ||
-                respStr.contains('<!DOCTYPE');
+                respStr.contains('Direct IP access not allowed');
 
             final isAcceptable = (firstLine.contains(' 101 ') ||
                     firstLine.contains(' 200 ') ||
@@ -457,6 +490,7 @@ class PingService {
 
     final outbounds = (raw["outbounds"] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)).toList() ?? [];
     if (outbounds.isEmpty && config.node != null) {
+      // Build outbound from node if not present
       outbounds.add({
         "tag": "proxy",
         "protocol": config.node!.protocol.name,
@@ -486,7 +520,17 @@ class PingService {
         workingDirectory: workingDirectory,
         environment: environment,
       );
-      await Future.delayed(const Duration(milliseconds: 50));
+      // Wait until listening socket is ready
+      for (int i = 0; i < 8; i++) {
+        try {
+          final s = await Socket.connect("127.0.0.1", listenPort, timeout: const Duration(milliseconds: 50));
+          await s.close();
+          s.destroy();
+          break;
+        } catch (_) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      }
     }
 
     return _TemporaryProxyInstance(process: process, configFile: tempFile);
