@@ -106,6 +106,31 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "queryCoreStats" -> {
+                    val port = call.argument<Int>("port") ?: 10085
+                    val xrayBinary = call.argument<String>("xrayBinary") ?: ""
+                    Thread {
+                        try {
+                            val bin = if (xrayBinary.isNotEmpty() && File(xrayBinary).exists()) {
+                                xrayBinary
+                            } else {
+                                val libDir = applicationInfo.nativeLibraryDir
+                                File(libDir, "libxray.so").absolutePath
+                            }
+                            val pb = ProcessBuilder(bin, "api", "statsquery", "--server=127.0.0.1:$port")
+                            val proc = pb.start()
+                            val output = proc.inputStream.bufferedReader().use { it.readText() }
+                            proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+                            runOnUiThread {
+                                result.success(output)
+                            }
+                        } catch (e: Exception) {
+                            runOnUiThread {
+                                result.success(null)
+                            }
+                        }
+                    }.start()
+                }
                 "isAnotherVpnActive" -> {
                     val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                     var hasOtherVpn = false

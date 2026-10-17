@@ -282,25 +282,7 @@ Future<RealDelayResult> _executeRealDelay(
   bool isTurbo, {
   bool skipBatchProxy = false,
 }) async {
-  // If node is currently connected, test via active local proxy
-  final isRunningLocally = XrayProcessService.instance.state == EngineState.running ||
-      (Platform.isAndroid && await XrayProcessService.instance.isAndroidVpnRunning());
-  final activeNode = XrayProcessService.instance.activeRunningNode;
-  final isCurrentActiveNode = activeNode != null && (
-    node.id == activeNode.id ||
-    (node.address == activeNode.address && node.port == activeNode.port) ||
-    (node.uuidOrPassword.isNotEmpty && node.uuidOrPassword == activeNode.uuidOrPassword)
-  );
-
-  if (isRunningLocally && (node.isActive || isCurrentActiveNode)) {
-    return _probeProxyEndpoint(
-      proxyHost: '127.0.0.1',
-      proxyPort: XrayProcessService.instance.httpPort,
-      timeout: effectiveTimeout,
-      isTurbo: isTurbo,
-      nodeFallback: node,
-    );
-  }
+  // Direct probe: Ping must test node directly and NOT pass through running VPN/proxy
 
   // Pre-connection Real Delay via Ephemeral Multi-inbound Process (Desktop only)
   // On Android, background child processes cannot be spawned via Process.start, so skip directly to fast authentic protocol probe
