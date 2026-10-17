@@ -158,6 +158,21 @@ class XrayProcessService {
 
   Directory? get androidAssetDir => _androidAssetDir;
 
+  /// Requests or verifies Android VPN system preparation permission.
+  /// Returns true if permission is granted, false if rejected.
+  Future<bool> prepareAndroidVpn() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      const channel = MethodChannel('com.v2raypro.app/native');
+      final res = await channel.invokeMethod<bool>('prepareVpn');
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Starts or updates the Android native foreground VPN service.
+  /// Pre-verifies VPN permission when [isTun] is true.
   Future<bool> startAndroidVpn(
     String configName, {
     String xrayBinary = '',
@@ -171,6 +186,13 @@ class XrayProcessService {
   }) async {
     if (!Platform.isAndroid) return false;
     try {
+      if (isTun) {
+        final prepared = await prepareAndroidVpn();
+        if (!prepared) {
+          LogService.instance.add("Android VPN permission was rejected by user.", level: LogLevel.warning, source: "system");
+          return false;
+        }
+      }
       const channel = MethodChannel('com.v2raypro.app/native');
       final res = await channel.invokeMethod<bool>('startVpnService', {
         'configName': configName,
@@ -728,9 +750,12 @@ class XrayProcessService {
   }) async {
     final isAndroidRunning = Platform.isAndroid && (await isAndroidVpnRunning());
 
-    // On Windows or if Android VPN is not yet running, ensure cleanup.
-    // If Android VPN is already running, avoid tearing down VPN service to allow seamless core reload.
-    if (!isAndroidRunning) {
+    // On Windows, terminate any previous running core before starting.
+    // On Android:
+    // - If VPN is already running, avoid tearing down VPN service to allow seamless reload.
+    // - If VPN is NOT running, do NOT call stop() because sending an asynchronous ACTION_STOP
+    //   intent immediately before ACTION_START creates a race condition that kills the newly started VPN!
+    if (!Platform.isAndroid) {
       await stop();
     }
 

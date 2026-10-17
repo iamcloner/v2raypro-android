@@ -1598,6 +1598,10 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                             _showAdminElevationDialog(context, locale);
                             return;
                           }
+                          if (Platform.isAndroid && !isConnected && isTun) {
+                            final prepOk = await XrayProcessService.instance.prepareAndroidVpn();
+                            if (!prepOk) return;
+                          }
                           ref.read(connectionStatusProvider.notifier).toggleConnect();
                         },
                 ),

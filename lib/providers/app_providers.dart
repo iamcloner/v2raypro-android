@@ -43,6 +43,14 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
       final session = await StorageService.instance.loadActiveSession();
       final isRunning = await XrayProcessService.instance.isAndroidVpnRunning();
 
+      if (!isRunning) {
+        if (session != null) {
+          await StorageService.instance.clearActiveSession();
+        }
+        state = ConnectionStateEnum.disconnected;
+        return;
+      }
+
       if (session != null) {
         final connectedAt = session['connectedAt'] as DateTime?;
         final nodeId = session['nodeId'] as String?;
@@ -83,25 +91,13 @@ class ConnectionStatusNotifier extends StateNotifier<ConnectionStateEnum> {
           }
         }
 
-        // 5. Restore connection state and ensure Xray core is running
-        if (isRunning || state == ConnectionStateEnum.connected || session != null) {
-          state = ConnectionStateEnum.connected;
-          XrayProcessService.instance.restoreRunningState();
+        // 5. Restore connection state
+        state = ConnectionStateEnum.connected;
+        XrayProcessService.instance.restoreRunningState();
 
-          if (XrayProcessService.instance.state != EngineState.running && active != null) {
-            await XrayProcessService.instance.start(
-              active,
-              enableTun: true,
-              setSysProxy: false,
-              enableUdp: true,
-              allowLan: false,
-            );
-          }
-
-          ref.read(outboundInfoProvider.notifier).fetch();
-          _testPing();
-        }
-      } else if (isRunning) {
+        ref.read(outboundInfoProvider.notifier).fetch();
+        _testPing();
+      } else {
         state = ConnectionStateEnum.connected;
         XrayProcessService.instance.restoreRunningState();
         ref.read(connectedAtProvider.notifier).state ??= DateTime.now();

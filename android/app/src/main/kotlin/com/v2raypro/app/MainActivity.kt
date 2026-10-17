@@ -16,6 +16,16 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
+/**
+ * Main application activity for V2RayPro on Android.
+ *
+ * Handles native platform integration between Flutter and Android OS:
+ * - VpnService permission requests and lifecycle management
+ * - Notification permission requests for Android 13+
+ * - Battery optimization exemption requests
+ * - Native library directory and binary path resolution
+ * - Foreground VPN service dispatch and broadcast reception
+ */
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.v2raypro.app/native"
     private val VPN_REQUEST_CODE = 2026
@@ -173,6 +183,15 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     } catch (_: Exception) {
                         result.success(false)
+                    }
+                }
+                "prepareVpn" -> {
+                    val prepareIntent = VpnService.prepare(this)
+                    if (prepareIntent != null) {
+                        pendingVpnResult = result
+                        startActivityForResult(prepareIntent, VPN_REQUEST_CODE)
+                    } else {
+                        result.success(true)
                     }
                 }
                 "startVpnService" -> {
@@ -363,24 +382,33 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == VPN_REQUEST_CODE) {
             if (resultCode == RESULT_OK) {
-                launchVpnService(
-                    pendingConfigName,
-                    pendingHttpPort,
-                    pendingSocksPort,
-                    pendingIsTun,
-                    pendingNotificationTitle,
-                    pendingDisconnectText,
-                    pendingAppRoutingMode,
-                    pendingAppRoutingList,
-                    pendingXrayBinary,
-                    pendingConfigPath,
-                    pendingAssetDir
-                )
-                pendingVpnResult?.success(true)
+                // If this preparation was triggered as part of a pending start request, launch the service
+                if (pendingConfigPath.isNotEmpty()) {
+                    window.decorView.postDelayed({
+                        launchVpnService(
+                            pendingConfigName,
+                            pendingHttpPort,
+                            pendingSocksPort,
+                            pendingIsTun,
+                            pendingNotificationTitle,
+                            pendingDisconnectText,
+                            pendingAppRoutingMode,
+                            pendingAppRoutingList,
+                            pendingXrayBinary,
+                            pendingConfigPath,
+                            pendingAssetDir
+                        )
+                        pendingVpnResult?.success(true)
+                        pendingVpnResult = null
+                    }, 100)
+                } else {
+                    pendingVpnResult?.success(true)
+                    pendingVpnResult = null
+                }
             } else {
                 pendingVpnResult?.success(false)
+                pendingVpnResult = null
             }
-            pendingVpnResult = null
         }
     }
 

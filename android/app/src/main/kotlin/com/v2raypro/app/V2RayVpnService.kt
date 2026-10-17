@@ -14,6 +14,16 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 
+/**
+ * Android VpnService implementation for V2RayPro.
+ *
+ * Responsibilities:
+ * - Allocates and manages the Linux TUN virtual network interface
+ * - Routes traffic through hev-socks5-tunnel into the local Xray SOCKS inbound
+ * - Supports seamless in-place configuration reloads without breaking the TUN interface
+ * - Manages the foreground notification and partial wake lock during startup
+ * - Performs per-app proxy routing (inclusive/exclusive modes)
+ */
 class V2RayVpnService : VpnService() {
 
     companion object {
@@ -229,7 +239,7 @@ class V2RayVpnService : VpnService() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     proc.destroyForcibly()
                 }
-                proc.waitFor(800, java.util.concurrent.TimeUnit.MILLISECONDS)
+                proc.waitFor(300, java.util.concurrent.TimeUnit.MILLISECONDS)
             }
         } catch (_: Exception) {}
         xrayProcess = null
@@ -309,10 +319,6 @@ class V2RayVpnService : VpnService() {
             wakeLock?.acquire(10 * 1000L)
         } catch (_: Exception) {}
 
-        if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
-            startXray(xrayBinary, configPath, assetDir)
-        }
-
         if (isTun) {
             try {
                 val builder = Builder()
@@ -343,9 +349,28 @@ class V2RayVpnService : VpnService() {
                     }
                 }
 
-                val pfd = builder.establish()
+                // Establish TUN interface first. Android creates the VPN descriptor and displays
+                // the VPN key icon in the system status bar immediately.
+                var pfd = builder.establish()
+                if (pfd == null) {
+                    // System may need a brief delay after permission grant or previous interface cleanup
+                    for (attempt in 1..3) {
+                        try {
+                            Thread.sleep(150)
+                            pfd = builder.establish()
+                            if (pfd != null) break
+                        } catch (_: Exception) {}
+                    }
+                }
+
                 vpnInterface = pfd
                 if (pfd != null) {
+                    // 1. Start Xray core process
+                    if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
+                        startXray(xrayBinary, configPath, assetDir)
+                    }
+
+                    // 2. Configure and start hev-socks5-tunnel on the established TUN file descriptor
                     val tunConfig = java.io.File(cacheDir, "tunnel.yaml")
                     val configContent = """
 tunnel:
@@ -370,6 +395,10 @@ misc:
 
                     hev.htproxy.TProxyService.TProxyStartService(tunConfig.absolutePath, pfd.fd)
                 } else {
+                    val logFile = java.io.File(cacheDir, "xray.log")
+                    try {
+                        logFile.appendText("[VPN Service] Builder.establish() failed to allocate TUN interface after retries.\n")
+                    } catch (_: Exception) {}
                     stopVpn()
                     return
                 }
@@ -385,6 +414,9 @@ misc:
         } else {
             // Proxy Mode: No VPN tunnel is established; VPN key icon does NOT appear!
             vpnInterface = null
+            if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
+                startXray(xrayBinary, configPath, assetDir)
+            }
             isRunning = true
             currentSocksPort = socksPort
             currentIsTun = false
