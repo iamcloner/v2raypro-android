@@ -1,5 +1,6 @@
 package com.v2raypro.app
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -156,24 +157,43 @@ class MainActivity : FlutterActivity() {
                     result.success(hasOtherVpn)
                 }
                 "isVpnRunning" -> {
-                    val flagFile = File(cacheDir, "vpn_running.flag")
                     var running = false
+                    val flagFile = File(cacheDir, "vpn_running.flag")
                     if (flagFile.exists()) {
+                        running = true
+                    }
+                    if (!running && V2RayVpnService.isRunning) {
+                        running = true
+                    }
+                    if (!running) {
                         try {
-                            val pidStr = flagFile.readText().trim()
-                            val pid = pidStr.toIntOrNull()
-                            if (pid != null && File("/proc/$pid").exists()) {
-                                running = true
-                            } else if (V2RayVpnService.isRunning) {
-                                running = true
-                            } else {
-                                flagFile.delete()
+                            val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                            @Suppress("DEPRECATION")
+                            val isServiceRunning = am.getRunningServices(100).any {
+                                it.service.className == V2RayVpnService::class.java.name
                             }
-                        } catch (_: Exception) {
-                            running = V2RayVpnService.isRunning
-                        }
-                    } else {
-                        running = V2RayVpnService.isRunning
+                            if (isServiceRunning) running = true
+                        } catch (_: Exception) {}
+                    }
+                    if (!running) {
+                        try {
+                            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                val activeNet = cm.activeNetwork
+                                val caps = cm.getNetworkCapabilities(activeNet)
+                                if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
+                                    running = true
+                                }
+                            } else {
+                                for (net in cm.allNetworks) {
+                                    val caps = cm.getNetworkCapabilities(net) ?: continue
+                                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                                        running = true
+                                        break
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
                     }
                     result.success(running)
                 }

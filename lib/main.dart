@@ -149,11 +149,13 @@ class _MainShellState extends ConsumerState<MainShell> {
           ref.read(connectionStatusProvider.notifier).setDisconnected();
         }
       };
-      ref.read(connectionStatusProvider.notifier).checkExistingConnection();
       const MethodChannel('com.v2raypro.app/native').invokeMethod('requestNotificationPermission');
       const MethodChannel('com.v2raypro.app/native').invokeMethod('requestIgnoreBatteryOptimizations');
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (Platform.isAndroid) {
+        await ref.read(connectionStatusProvider.notifier).checkExistingConnection();
+      }
       _checkAutoConnect();
       _checkStartupUpdate();
     });

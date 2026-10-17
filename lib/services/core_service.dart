@@ -186,6 +186,9 @@ class CoreService {
     bool enableMux = false,
     bool allowInsecure = false,
     bool allowLan = false,
+    String? notificationTitle,
+    String? disconnectText,
+    String? configName,
   }) async {
     await _stopCoreProcess();
 
@@ -266,6 +269,9 @@ class CoreService {
           status: TunStatus.connect,
           socksPort: _socksPort,
           httpPort: _httpPort,
+          notificationTitle: notificationTitle,
+          disconnectText: disconnectText,
+          configName: configName,
           xrayBinary: binaryPath,
           configPath: _activeConfigFile?.path,
           assetDir: _androidAssetDir?.path,
@@ -395,17 +401,26 @@ class CoreService {
     LogService.instance.add("CoreService: Disconnected.", level: LogLevel.info, source: "core");
   }
 
-  void restoreConnectedState() {
+  void restoreConnectedState({DateTime? connectedAt}) {
     _setState(CoreState.connected);
-    if (_connectedAt == null) {
-      _startDurationTimer();
+    if (connectedAt != null) {
+      _connectedAt = connectedAt;
+    } else {
+      _connectedAt ??= DateTime.now();
     }
+    _durationTimer?.cancel();
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_connectedAt != null) {
+        final elapsed = DateTime.now().difference(_connectedAt!);
+        _durationStreamController.add(elapsed);
+      }
+    });
     _startTrafficPolling();
   }
 
   void _startDurationTimer() {
     _durationTimer?.cancel();
-    _connectedAt = DateTime.now();
+    _connectedAt ??= DateTime.now();
     _durationStreamController.add(Duration.zero);
 
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -431,7 +446,7 @@ class CoreService {
     _trafficTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       if (_state != CoreState.connected) return;
       final binary = _currentBinaryPath ?? _findCoreBinary(_activeConfig?.type ?? CoreType.xray);
-      if (binary == null) return;
+      if (!Platform.isAndroid && binary == null) return;
       try {
         String? output;
         if (Platform.isAndroid) {
@@ -439,12 +454,12 @@ class CoreService {
             const channel = MethodChannel('com.v2raypro.app/native');
             output = await channel.invokeMethod<String>('queryCoreStats', {
               'port': _apiPort,
-              'xrayBinary': binary,
+              if (binary != null) 'xrayBinary': binary,
             });
           } catch (_) {}
         }
 
-        if (output == null || output.isEmpty) {
+        if ((output == null || output.isEmpty) && binary != null) {
           final res = await Process.run(binary, [
             'api',
             'statsquery',

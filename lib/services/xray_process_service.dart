@@ -216,6 +216,7 @@ class XrayProcessService {
     bool allowLan = false,
     String? notificationTitle,
     String? disconnectText,
+    String? configName,
     int? httpPort,
     int? socksPort,
   }) async {
@@ -244,6 +245,9 @@ class XrayProcessService {
       enableMux: globalEnableMux,
       allowInsecure: globalAllowInsecure,
       allowLan: allowLan || globalAllowLan,
+      notificationTitle: notificationTitle,
+      disconnectText: disconnectText,
+      configName: configName ?? node.name,
     );
 
     if (ok && setSysProxy && Platform.isWindows) {
@@ -257,8 +261,8 @@ class XrayProcessService {
     _activeRunningNode = node;
   }
 
-  void restoreRunningState() {
-    core.restoreConnectedState();
+  void restoreRunningState({DateTime? connectedAt}) {
+    core.restoreConnectedState(connectedAt: connectedAt);
   }
 
   Future<void> stop() async {
