@@ -2,15 +2,7 @@
 
 ## [1.2.2] - 2026-10-17
 
-### تغییرات و بهینه‌سازی‌ها / Improvements & Fixes
-- **اصلاح دقیق پینگ تأخیر واقعی (Real-Delay Ping)**:
-  - اندازه‌گیری دقیق تاخیر بر مبنای 1-RTT مشابه v2rayNG از طریق پروب استاندارد HTTP Port 80 بدون عبور از تانل VPN و نمایش تاخیر واقعی سرور.
-  - پروب دقیق و پایدار انواع کانفیگ‌ها به ویژه WebSocket و xhttp بدون گیر کردن یا تاخیر کاذب.
-- **بازیابی کامل نشست اتصال پس از بستن برنامه (Session Restoration)**:
-  - رفع کامل مشکل بازنشانی وضعیت در هنگام بستن برنامه از Recent Apps و ورود مجدد؛ بازیابی پایدار وضعیت اتصال، مدت زمان، آی‌پی خروجی، پینگ و ترافیک مصرفی.
-  - بررسی امن وضعیت سرویس تانل در فرآیندهای مجزا با استفاده از ActivityManager و ConnectivityManager.
-- **اعلان هوشمند و چندزبانه (Localized Notification with Config Name)**:
-  - نمایش نام کانفیگ متصل‌شده در متن اعلان نوار وضعیت.
-  - هماهنگی کامل زبان اعلان با زبان انتخابی کاربر در تنظیمات برنامه (فارسی، انگلیسی، چینی، روسی).
-- **سوییچ روان و پایدار بین کانفیگ‌ها (Seamless Config Switching)**:
-  - اصلاح مکانیزم تعویض کانفیگ بدون قطعی ناخواسته تانل و همگام‌سازی لحظه‌ای داشبورد.
+- **Accurate Real-Delay Ping**: Calibrated 1-RTT HTTP probe matching v2rayNG; bypassed VPN tunnel; fixed WebSocket and xhttp latency testing.
+- **Background Session Restoration**: Correctly restores connection status, duration, outbound IP, ping, and traffic when reopening app from background / Recent Apps.
+- **Localized Notifications**: Status bar notification displays the active config name and adapts to the selected app language.
+- **Seamless Config Switch**: Smooth handover between proxy nodes without unexpected VPN disconnection.
