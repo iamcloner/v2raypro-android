@@ -126,6 +126,12 @@ class CoreService {
   String? _androidBinaryPath;
   Directory? _androidAssetDir;
 
+  String? get androidBinaryPath => _androidBinaryPath;
+  Directory? get androidAssetDir => _androidAssetDir;
+  String? get currentBinaryPath => _currentBinaryPath ?? _findCoreBinary(CoreType.xray);
+  String? get workingDirectory => _findCoreBinary(CoreType.xray) != null ? _getWorkingDirectory(_findCoreBinary(CoreType.xray)!) : null;
+  Map<String, String>? get coreEnvironment => _getCoreEnvironment();
+
   // ========================================================
   // Main Unified Action Entrypoint
   // ========================================================
@@ -576,7 +582,7 @@ class CoreService {
       }
     ];
 
-    if (enableTun) {
+    if (enableTun && config.type == CoreType.singbox) {
       inbounds.add({
         "tag": "tun-in",
         "protocol": "tun",

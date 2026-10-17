@@ -284,9 +284,8 @@ Future<RealDelayResult> _executeRealDelay(
 }) async {
   // Direct probe: Ping must test node directly and NOT pass through running VPN/proxy
 
-  // Pre-connection Real Delay via Ephemeral Multi-inbound Process (Desktop only)
-  // On Android, background child processes cannot be spawned via Process.start, so skip directly to fast authentic protocol probe
-  if (!Platform.isAndroid && !skipBatchProxy && XrayProcessService.instance.isNodeConfigSupported(node)) {
+  // Pre-connection Real Delay via Ephemeral Proxy
+  if (!skipBatchProxy && XrayProcessService.instance.isNodeConfigSupported(node)) {
     try {
       final batchMap = await XrayProcessService.instance.testNodesBatchRealProxy(
         [node],

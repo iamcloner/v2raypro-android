@@ -153,6 +153,10 @@ class XrayProcessService {
   }
 
   String? findXrayBinarySync() {
+    if (Platform.isAndroid) {
+      final bin = core.androidBinaryPath;
+      if (bin != null && File(bin).existsSync()) return bin;
+    }
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final candidates = [
       "$exeDir/xray/xray.exe",
@@ -309,6 +313,8 @@ class XrayProcessService {
       showCountry: showCountry,
       timeout: timeout,
       xrayBinaryPath: findXrayBinarySync(),
+      workingDirectory: core.workingDirectory,
+      environment: core.coreEnvironment,
     );
   }
 
