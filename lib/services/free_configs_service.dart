@@ -193,28 +193,37 @@ class FreeConfigsService {
         targetWorking: targetWorking,
       ));
 
-      // 6. Test all unique nodes in chunked batches using ephemeral multi-inbound Xray process
-      const int batchSize = 25;
+      // 6. Test all unique nodes using asynchronous worker pool sliding window
+      if (Platform.isAndroid && XrayProcessService.instance.core.androidBinaryPath == null) {
+        await XrayProcessService.instance.initAndroid();
+      }
+
+      final poolSize = (concurrency > 0) ? concurrency : 25;
+      final workerCount = min(poolSize, uniqueNodes.length);
+      int nextIndex = 0;
       int testedCount = 0;
       final testStartTime = DateTime.now();
+      final modeStr = (testMode != null && testMode.toString().contains('turbo')) ? 'turbo' : 'normal';
 
-      for (int i = 0; i < uniqueNodes.length; i += batchSize) {
-        if (_isCancelled) break;
-        final end = min(i + batchSize, uniqueNodes.length);
-        final chunk = uniqueNodes.sublist(i, end);
+      Future<void> worker() async {
+        while (true) {
+          if (_isCancelled) break;
+          int idx;
+          if (nextIndex >= uniqueNodes.length) break;
+          idx = nextIndex++;
 
-        final resMap = await testRealDelayBatch(
-          mode: 'turbo',
-          type: 'xray',
-          configs: chunk.map((n) => n.toJson()).toList(),
-          timeout: const Duration(milliseconds: 2200),
-        );
-        if (_isCancelled) break;
+          final node = uniqueNodes[idx];
+          final res = await testRealDelay(
+            mode: modeStr,
+            type: 'xray',
+            config: node.toJson(),
+            timeout: const Duration(milliseconds: 2200),
+          );
 
-        for (final node in chunk) {
+          if (_isCancelled) break;
+
           testedCount++;
-          final res = resMap[node.id];
-          if (res != null && res.isSuccess) {
+          if (res.isSuccess) {
             final cCode = res.country?.toUpperCase() ?? node.countryCode ?? CountryService.resolveSync(node);
             final cName = res.countryName ?? (cCode != null ? CountryService.getCountryName(cCode) : node.country);
             final testedNode = node.copyWith(
@@ -233,31 +242,33 @@ class FreeConfigsService {
             );
             timeoutNodes.add(deadNode);
           }
-        }
 
-        String? etaStr;
-        if (totalUnique > 10 && testedCount > 0 && testedCount < totalUnique) {
-          final elapsed = DateTime.now().difference(testStartTime);
-          final avgPerNode = elapsed.inMilliseconds / testedCount;
-          final remainingMs = (avgPerNode * (totalUnique - testedCount)).round();
-          final remSeconds = (remainingMs / 1000).round();
-          final minutes = remSeconds ~/ 60;
-          final seconds = remSeconds % 60;
-          etaStr = '~${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-        }
+          String? etaStr;
+          if (totalUnique > 10 && testedCount > 0 && testedCount < totalUnique) {
+            final elapsed = DateTime.now().difference(testStartTime);
+            final avgPerNode = elapsed.inMilliseconds / testedCount;
+            final remainingMs = (avgPerNode * (totalUnique - testedCount)).round();
+            final remSeconds = (remainingMs / 1000).round();
+            final minutes = remSeconds ~/ 60;
+            final seconds = remSeconds % 60;
+            etaStr = '~${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+          }
 
-        onProgress?.call(FreeConfigsScanProgress(
-          totalScraped: totalScraped,
-          totalUnique: totalUnique,
-          testedCandidates: testedCount,
-          workingFound: workingNodes.length,
-          status: testedCount >= totalUnique ? 'completed' : 'testing',
-          workingNodes: List.unmodifiable(workingNodes),
-          timeoutNodes: List.unmodifiable(timeoutNodes),
-          isCompleted: testedCount >= totalUnique,
-          estimatedRemainingTime: etaStr,
-        ));
+          onProgress?.call(FreeConfigsScanProgress(
+            totalScraped: totalScraped,
+            totalUnique: totalUnique,
+            testedCandidates: testedCount,
+            workingFound: workingNodes.length,
+            status: testedCount >= totalUnique ? 'completed' : 'testing',
+            workingNodes: List.unmodifiable(workingNodes),
+            timeoutNodes: List.unmodifiable(timeoutNodes),
+            isCompleted: testedCount >= totalUnique,
+            estimatedRemainingTime: etaStr,
+          ));
+        }
       }
+
+      await Future.wait(List.generate(workerCount, (_) => worker()));
 
       if (_isCancelled) return workingNodes;
 

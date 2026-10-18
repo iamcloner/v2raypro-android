@@ -1,199 +1,32 @@
+// Cloudflare Scanner Service
+// Tests candidate Cloudflare edge IPs for TCP latency, TLS handshakes, and download speed.
+// Identifies clean IP addresses for bypassing SNI filtering and CDN circumvention.
+// Optimized for concurrency, timeout handling, and cancellation on Android.
+
 import "dart:async";
 import "dart:convert";
 import "dart:io";
 import "dart:math";
 import "../models/scan_result.dart";
+import "cloudflare_cidr_util.dart";
 
+export "cloudflare_cidr_util.dart";
+
+/// Scanning and validation service for clean Cloudflare edge IPs on Android.
+/// Evaluates TCP socket latency, TLS handshakes, and test download throughput.
 class CloudflareScannerService {
   static final CloudflareScannerService instance = CloudflareScannerService._internal();
   CloudflareScannerService._internal();
 
-  static const List<String> defaultCidrs = [
-    "104.16.0.0/13",
-    "104.24.0.0/14",
-    "172.64.0.0/13",
-    "162.158.0.0/15",
-    "198.41.128.0/17",
-    "173.245.48.0/20",
-    "108.162.192.0/18",
-    "190.93.240.0/20",
-    "188.114.96.0/20",
-    "197.234.240.0/22",
-    "141.101.64.0/18",
-    "103.21.244.0/22",
-    "103.22.200.0/22",
-    "103.31.4.0/22",
-    "131.0.72.0/22",
-    "162.159.0.0/16",
-    "1.0.0.0/24",
-    "1.1.1.0/24",
-    "8.6.112.0/24",
-  ];
+  static const List<String> defaultCidrs = CloudflareCidrUtil.defaultCidrs;
+  static const List<String> cfSubnets = CloudflareCidrUtil.cfSubnets;
 
-  static const List<String> cfSubnets = [
-    "104.16.",
-    "104.17.",
-    "104.18.",
-    "104.19.",
-    "104.20.",
-    "104.21.",
-    "172.64.",
-    "172.65.",
-    "172.66.",
-    "172.67.",
-    "162.158.",
-    "162.159.",
-    "108.162.",
-    "198.41.",
-    "173.245.",
-    "8.6.112.",
-  ];
-
-  /// Mathematically sample a random usable IPv4 from a CIDR (e.g. 104.18.0.0/16 or 104.16.0.0/13)
-  static String sampleIpFromCidr(String cidr, Random rng) {
-    try {
-      final parts = cidr.trim().split('/');
-      final ipParts = parts[0].split('.').map(int.parse).toList();
-      if (ipParts.length != 4) throw FormatException();
-
-      final prefixLength = parts.length > 1 ? int.parse(parts[1]) : 32;
-      if (prefixLength < 0 || prefixLength > 32) throw FormatException();
-
-      int baseIp = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
-      final hostBits = 32 - prefixLength;
-
-      if (hostBits <= 1) {
-        return parts[0];
-      }
-
-      final hostCount = 1 << hostBits;
-      // Reserve network and broadcast address for standard subnets
-      final offset = (hostBits > 2) ? (rng.nextInt(hostCount - 2) + 1) : rng.nextInt(hostCount);
-      final sampledIp = (baseIp & (~((1 << hostBits) - 1))) | offset;
-
-      final o1 = (sampledIp >> 24) & 0xFF;
-      final o2 = (sampledIp >> 16) & 0xFF;
-      final o3 = (sampledIp >> 8) & 0xFF;
-      final o4 = sampledIp & 0xFF;
-
-      return "$o1.$o2.$o3.$o4";
-    } catch (_) {
-      // Fallback if parsing fails
-      if (cidr.contains('.')) {
-        final raw = cidr.split('/')[0].trim();
-        final segs = raw.split('.');
-        if (segs.length >= 2) {
-          return "${segs[0]}.${segs[1]}.${rng.nextInt(250) + 1}.${rng.nextInt(254) + 1}";
-        }
-      }
-      return "104.18.${rng.nextInt(250) + 1}.${rng.nextInt(254) + 1}";
-    }
-  }
-
-  /// Check if a given IPv4 address belongs to any Cloudflare CIDR (default or custom)
-  static bool isCloudflareIp(String ip, [List<String>? cidrs]) {
-    final targetIp = ip.trim();
-    final parts = targetIp.split('.').map(int.tryParse).toList();
-    if (parts.length != 4 || parts.any((p) => p == null || p < 0 || p > 255)) {
-      return false;
-    }
-    final int ipInt = (parts[0]! << 24) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!;
-    final ranges = (cidrs != null && cidrs.isNotEmpty) ? cidrs : defaultCidrs;
-
-    for (final cidr in ranges) {
-      try {
-        final cidrParts = cidr.trim().split('/');
-        final baseParts = cidrParts[0].split('.').map(int.tryParse).toList();
-        if (baseParts.length != 4 || baseParts.any((p) => p == null)) continue;
-
-        final prefixLen = cidrParts.length > 1 ? int.parse(cidrParts[1]) : 32;
-        if (prefixLen < 0 || prefixLen > 32) continue;
-
-        final int baseInt = (baseParts[0]! << 24) | (baseParts[1]! << 16) | (baseParts[2]! << 8) | baseParts[3]!;
-        final int mask = prefixLen == 0 ? 0 : (~0 << (32 - prefixLen));
-
-        if ((ipInt & mask) == (baseInt & mask)) {
-          return true;
-        }
-      } catch (_) {}
-    }
-    return false;
-  }
-
-  static final Map<String, bool> _domainCfCache = {};
-
-  /// Check if a host (IP or domain name) is Cloudflare synchronously using cache or known rules
-  static bool isCloudflareHostSync(String host, [List<String>? cidrs]) {
-    final clean = host.trim().toLowerCase();
-    if (_domainCfCache.containsKey(clean)) {
-      return _domainCfCache[clean]!;
-    }
-    // Direct IP check
-    if (isCloudflareIp(clean, cidrs)) {
-      _domainCfCache[clean] = true;
-      return true;
-    }
-    // Well-known Cloudflare domain suffix check
-    if (clean == 'cloudflare.com' ||
-        clean.endsWith('.cloudflare.com') ||
-        clean == 'workers.dev' ||
-        clean.endsWith('.workers.dev') ||
-        clean == 'pages.dev' ||
-        clean.endsWith('.pages.dev') ||
-        clean.endsWith('.cfargotunnel.com')) {
-      _domainCfCache[clean] = true;
-      return true;
-    }
-    return false;
-  }
-
-  /// Asynchronously resolve domain and determine if it points to Cloudflare
-  static Future<bool> resolveAndCheckCloudflare(String host, [List<String>? cidrs]) async {
-    final clean = host.trim().toLowerCase();
-    if (_domainCfCache.containsKey(clean)) {
-      return _domainCfCache[clean]!;
-    }
-    if (isCloudflareHostSync(clean, cidrs)) {
-      _domainCfCache[clean] = true;
-      return true;
-    }
-
-    try {
-      final addresses = await InternetAddress.lookup(clean).timeout(const Duration(seconds: 3));
-      for (final addr in addresses) {
-        if (isCloudflareIp(addr.address, cidrs)) {
-          _domainCfCache[clean] = true;
-          return true;
-        }
-      }
-    } catch (_) {}
-
-    _domainCfCache[clean] = false;
-    return false;
-  }
-
-  /// Generate a unique, shuffled list of candidate IPs sampled from given or default CIDRs.
-  static List<String> generateCandidateIps({
-    required int count,
-    List<String>? cidrs,
-    Random? rng,
-  }) {
-    final rand = rng ?? Random();
-    final ranges = (cidrs != null && cidrs.isNotEmpty) ? cidrs : defaultCidrs;
-    final Set<String> candidates = {};
-
-    int attempts = 0;
-    while (candidates.length < count && attempts < count * 80) {
-      attempts++;
-      final cidr = ranges[rand.nextInt(ranges.length)];
-      final ip = sampleIpFromCidr(cidr, rand);
-      candidates.add(ip);
-    }
-
-    final list = candidates.toList();
-    list.shuffle(rand);
-    return list;
-  }
+  static String sampleIpFromCidr(String cidr, Random rng) => CloudflareCidrUtil.sampleIpFromCidr(cidr, rng);
+  static bool isCloudflareIp(String ip, [List<String>? cidrs]) => CloudflareCidrUtil.isCloudflareIp(ip, cidrs);
+  static bool isCloudflareHostSync(String host, [List<String>? cidrs]) => CloudflareCidrUtil.isCloudflareHostSync(host, cidrs);
+  static Future<bool> resolveAndCheckCloudflare(String host, [List<String>? cidrs]) => CloudflareCidrUtil.resolveAndCheckCloudflare(host, cidrs);
+  static List<String> generateCandidateIps({required int count, List<String>? cidrs, Random? rng}) =>
+      CloudflareCidrUtil.generateCandidateIps(count: count, cidrs: cidrs, rng: rng);
 
   bool _isCancelled = false;
 

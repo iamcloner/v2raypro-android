@@ -1,3 +1,11 @@
+// =======================================================================
+// [File Name]: xray_process_service.dart
+// [Description]: Facade managing coordination among Core, Tun, and Ping services.
+// Provides a unified interface for connection processes, latency testing, node state changes,
+// and synchronization of Android notifications and sockets within a clean architecture.
+// [Platform]: Android Native Proxy & VPN Client
+// =======================================================================
+
 import "dart:async";
 import "dart:io";
 import "package:flutter/services.dart";
@@ -5,70 +13,35 @@ import "../models/proxy_node.dart";
 import "../models/routing_rule.dart";
 import "../models/traffic_stats.dart";
 import "../models/service_models.dart";
+import "../models/node_test_result.dart";
 import "../utils/config_generator.dart";
 import "core_service.dart";
 import "tun_service.dart";
 import "ping_service.dart";
-import "log_service.dart";
 
-/// Result of testing a node (legacy wrapper for PingResult)
-class NodeTestResult {
-  final int? latencyMs;
-  final String? countryCode;
-  final String? country;
-  final String? exitIp;
+export "../models/node_test_result.dart";
 
-  const NodeTestResult({
-    this.latencyMs,
-    this.countryCode,
-    this.country,
-    this.exitIp,
-  });
-
-  bool get isSuccess => latencyMs != null && latencyMs! > 0;
-
-  factory NodeTestResult.fromPingResult(PingResult res) {
-    return NodeTestResult(
-      latencyMs: res.latencyMs,
-      countryCode: res.countryCode,
-      country: res.countryName,
-      exitIp: res.exitIp,
-    );
-  }
-
-  static ({String? ip, String? loc}) parseCloudflareTrace(String body) {
-    String? ip;
-    String? loc;
-    for (final line in body.split('\n')) {
-      final trimmed = line.trim();
-      if (trimmed.startsWith('ip=')) {
-        ip = trimmed.substring(3).trim();
-      } else if (trimmed.startsWith('loc=')) {
-        final val = trimmed.substring(4).trim().toUpperCase();
-        if (val.isNotEmpty && val != 'XX') {
-          loc = val;
-        }
-      }
-    }
-    return (ip: ip, loc: loc);
-  }
-}
-
+/// High-level engine execution state.
 enum EngineState { stopped, starting, running, stopping, error }
 
-/// Architecture Facade & Bridge:
-/// Delegates all operations to the new three dedicated services:
-/// - CoreService (Process lifecycle, connection duration, upload/download usage)
-/// - TunService (TUN interface, Wintun, Android VPN service)
-/// - PingService (realDelay, ipTest, ICMP/TCP/UDP)
+/// Central facade service for unified control of core and VPN operations on Android.
 class XrayProcessService {
+  /// Singleton instance of XrayProcessService.
   static final XrayProcessService instance = XrayProcessService._internal();
+
+  /// Internal private constructor implementing the singleton pattern.
   XrayProcessService._internal();
 
+  /// Access to proxy core service.
   CoreService get core => CoreService.instance;
+
+  /// Access to Android network tunnel service.
   TunService get tun => TunService.instance;
+
+  /// Access to latency and ping measurement service.
   PingService get ping => PingService.instance;
 
+  /// Computes aggregated engine state from core state.
   EngineState get state {
     switch (core.state) {
       case CoreState.disconnected:
@@ -84,101 +57,98 @@ class XrayProcessService {
     }
   }
 
+  /// Currently active running node in the application.
   ProxyNode? _activeRunningNode;
   ProxyNode? get activeRunningNode => _activeRunningNode;
 
+  /// Gets and sets SOCKS port.
   int get socksPort => core.socksPort;
   set socksPort(int p) => core.socksPort = p;
 
+  /// Gets and sets HTTP port.
   int get httpPort => core.httpPort;
   set httpPort(int p) => core.httpPort = p;
 
+  /// Internal API port for core communication.
   int get apiPort => core.apiPort;
 
-  List<String> get dnsServers => core.dnsServers;
-  set dnsServers(List<String> d) => core.dnsServers = d;
-
+  /// System proxy configured state.
   bool get isSystemProxySet => tun.isSystemProxySet;
 
-  bool get globalAllowInsecure => core.allowInsecure;
-  set globalAllowInsecure(bool v) => core.allowInsecure = v;
+  /// Global connection multiplexing settings.
+  bool globalEnableMux = false;
 
-  bool get globalEnableMux => core.enableMux;
-  set globalEnableMux(bool v) => core.enableMux = v;
+  /// Allows insecure connections without TLS certificate verification.
+  bool globalAllowInsecure = false;
 
-  bool get globalAllowLan => core.allowLan;
-  set globalAllowLan(bool v) => core.allowLan = v;
+  /// Allows proxy sharing over local area network (LAN).
+  bool globalAllowLan = false;
 
-  List<RoutingRule> get routingRules => core.routingRules;
-  set routingRules(List<RoutingRule> r) => core.routingRules = r;
+  /// List of user-configured DNS servers.
+  List<String> dnsServers = [];
 
-  AppRoutingMode get appRoutingMode => core.appRoutingMode;
-  set appRoutingMode(AppRoutingMode m) => core.appRoutingMode = m;
+  /// List of traffic routing rules.
+  List<RoutingRule> routingRules = [];
 
+  /// Per-app routing mode on Android.
+  AppRoutingMode appRoutingMode = AppRoutingMode.exclusive;
+
+  /// Real-time traffic consumption stream.
   Stream<TrafficStats> get trafficStream => core.trafficStream;
   TrafficStats get currentTrafficStats => core.currentTrafficStats;
 
+  /// Disconnect callback invoked from Android notification.
   VoidCallback? get onAndroidNotificationDisconnect => tun.onNotificationDisconnect;
   set onAndroidNotificationDisconnect(VoidCallback? cb) => tun.onNotificationDisconnect = cb;
 
-  Directory? get androidAssetDir => null;
-
+  /// Initializes core runtime environment on Android.
   Future<void> initAndroid() async {
     await core.initAndroid();
   }
 
+  /// Directory hosting static files and geo databases on Android.
+  Directory? get androidAssetDir => core.androidAssetDir;
+
+  /// Checks user access permissions (always considered permitted on Android).
   bool isRunningAsAdmin() => tun.isRunningAsAdmin();
 
-  Future<void> restartAsAdmin() => tun.restartAsAdmin();
-
+  /// Sets system proxy (desktop only - no-op on Android).
   void setWindowsSystemProxy(bool enable, {int? port}) {
     tun.setWindowsSystemProxy(enable, port: port);
   }
 
+  /// Checks whether Android background VPN service is running.
   Future<bool> isAndroidVpnRunning() => tun.isVpnActive();
 
+  /// Pre-validates VPN permission on Android OS.
   Future<bool> prepareAndroidVpn() => tun.prepareAndroidVpn();
 
+  /// Periodically synchronizes logs from background Kotlin service.
   Future<void> syncAndroidLogs() => tun.syncAndroidLogs();
 
+  /// Checks whether another VPN session is active on the Android device.
   Future<bool> isAnotherVpnActive() async {
     if (!Platform.isAndroid) return false;
     try {
-      const channel = MethodChannel('com.v2raypro.app/native');
-      final res = await channel.invokeMethod<bool>('isAnotherVpnActive');
+      const channel = MethodChannel("com.v2raypro.app/native");
+      final res = await channel.invokeMethod<bool>("isAnotherVpnActive");
       return res ?? false;
     } catch (_) {
       return false;
     }
   }
 
+  /// Resolves Xray binary path within Android native libraries directory.
   String? findXrayBinarySync() {
-    if (Platform.isAndroid) {
-      final bin = core.androidBinaryPath;
-      if (bin != null && File(bin).existsSync()) return bin;
-    }
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final candidates = [
-      "$exeDir/xray/xray.exe",
-      "xray/xray.exe",
-      "xray.exe",
-      "assets/bin/xray.exe",
-      "$exeDir/xray.exe",
-      "$exeDir/assets/bin/xray.exe",
-      "$exeDir/data/flutter_assets/assets/bin/xray.exe",
-      "flutter/assets/bin/xray.exe",
-    ];
-    for (final p in candidates) {
-      if (File(p).existsSync()) return p;
-    }
+    final bin = core.androidBinaryPath;
+    if (bin != null && File(bin).existsSync()) return bin;
     return null;
   }
 
-  bool isCoreAvailable() {
-    if (Platform.isAndroid) return true;
-    return findXrayBinarySync() != null;
-  }
+  /// Checks whether core executable is available.
+  bool isCoreAvailable() => true;
 
+  /// Pre-validates address and port parameter structure for a node configuration.
   bool isNodeConfigSupported(ProxyNode node) {
     if (node.address.trim().isEmpty || node.port <= 0 || node.port > 65535) return false;
     if (node.protocol == ProtocolType.vless || node.protocol == ProtocolType.vmess) {
@@ -190,6 +160,7 @@ class XrayProcessService {
     return true;
   }
 
+  /// Generates standard Xray configuration map for node incorporating routing rules and settings.
   Map<String, dynamic> generateXrayConfig(
     ProxyNode node, {
     bool enableTun = false,
@@ -212,9 +183,10 @@ class XrayProcessService {
     );
   }
 
+  /// Initiates connection process to selected configuration through core and Android tunnel layers.
   Future<bool> start(
     ProxyNode node, {
-    bool enableTun = false,
+    bool enableTun = true,
     bool setSysProxy = false,
     bool enableUdp = true,
     bool allowLan = false,
@@ -228,19 +200,19 @@ class XrayProcessService {
     final effectiveSocksPort = socksPort ?? this.socksPort;
 
     _activeRunningNode = node;
-    final config = CoreConfig.fromNode(
+    final configMap = generateXrayConfig(
       node,
-      type: CoreType.xray,
-      socksPort: effectiveSocksPort,
-      httpPort: effectiveHttpPort,
       enableTun: enableTun,
       enableUdp: enableUdp,
-      enableMux: globalEnableMux,
-      allowInsecure: globalAllowInsecure,
       allowLan: allowLan || globalAllowLan,
     );
+    final config = CoreConfig(
+      rawJson: configMap,
+      type: CoreType.xray,
+      node: node,
+    );
 
-    final ok = await core.connect(
+    return await core.connect(
       mode: enableTun ? CoreMode.tun : CoreMode.proxy,
       config: config,
       httpPort: effectiveHttpPort,
@@ -253,44 +225,35 @@ class XrayProcessService {
       disconnectText: disconnectText,
       configName: configName ?? node.name,
     );
-
-    if (ok && setSysProxy && Platform.isWindows) {
-      tun.setWindowsSystemProxy(true, port: core.httpPort);
-    }
-
-    return ok;
   }
 
+  /// Stores active running node in runtime memory.
   void setActiveRunningNode(ProxyNode node) {
     _activeRunningNode = node;
   }
 
+  /// Restores connected state when application resumes to foreground.
   void restoreRunningState({DateTime? connectedAt}) {
     core.restoreConnectedState(connectedAt: connectedAt);
   }
 
+  /// Completely stops proxy and cleans up connections.
   Future<void> stop() async {
     _activeRunningNode = null;
     await core.disconnect();
   }
 
+  /// Clears connections and performs a full service reset.
   void cleanupSystemAndXray({bool force = false}) {
-    tun.setWindowsSystemProxy(false);
-    if (Platform.isWindows) {
-      try {
-        Process.runSync("taskkill", ["/F", "/IM", "xray.exe"]);
-      } catch (_) {}
-    }
+    stop();
   }
 
-  // ========================================================
-  // Ping & Real Delay Delegations
-  // ========================================================
-
+  /// Tests server protocol latency (TCP/TLS probe).
   Future<int?> testNodeProtocolDelay(ProxyNode node, {Duration timeout = const Duration(seconds: 3), int count = 1}) async {
     return await ping.pingProtocolDelay(node, timeout: timeout, count: count);
   }
 
+  /// Tests connection to Google via proxy socket.
   Future<int?> pingGoogleViaProxy(dynamic client, {int count = 1, Duration timeout = const Duration(seconds: 4)}) async {
     if (client is HttpClient) {
       return await ping.pingGoogleViaProxy(client, count: count, timeout: timeout);
@@ -298,6 +261,7 @@ class XrayProcessService {
     return null;
   }
 
+  /// Executes standalone ping test for a proxy node.
   Future<PingResult> pingNode(
     ProxyNode node, {
     PingMode mode = PingMode.realDelay,
@@ -318,6 +282,7 @@ class XrayProcessService {
     );
   }
 
+  /// Tests node real delay via temporary proxy to verified Cloudflare destinations.
   Future<NodeTestResult> testNodeRealDelay(
     ProxyNode node, {
     Duration timeout = const Duration(seconds: 4),
@@ -325,32 +290,27 @@ class XrayProcessService {
   }) async {
     final effectiveTimeout = isTurbo ? const Duration(milliseconds: 1500) : timeout;
 
-    // Ping must directly test node endpoint and NOT pass through running VPN/proxy
     final res = await pingNode(
-      node,
-      mode: PingMode.realDelay,
-      type: PingType.tcp,
-      showCountry: true,
-      timeout: effectiveTimeout,
+      node, mode: PingMode.realDelay, type: PingType.tcp, showCountry: true, timeout: effectiveTimeout,
     );
     return NodeTestResult.fromPingResult(res);
   }
 
+  /// Tests direct TCP socket to specified address and port.
   Future<int?> tcpPing(
     String host,
     int port, {
     int count = 1,
     Duration timeout = const Duration(seconds: 3),
   }) async {
-    final dummyNode = ProxyNode(
+    final cfg = CoreConfig.fromNode(ProxyNode(
       id: "probe",
       name: "probe",
       address: host,
       port: port,
       protocol: ProtocolType.vless,
       uuidOrPassword: "dummy",
-    );
-    final cfg = CoreConfig.fromNode(dummyNode);
+    ));
     int? bestLatency;
     for (int i = 0; i < count; i++) {
       final res = await ping.ping(
@@ -368,10 +328,12 @@ class XrayProcessService {
     return bestLatency;
   }
 
+  /// Measures configuration latency in minimum possible duration.
   Future<int?> testNodeLatency(ProxyNode node, {Duration timeout = const Duration(seconds: 3)}) async {
     return await ping.pingProtocolDelay(node, timeout: timeout, count: 1);
   }
 
+  /// Concurrently executes real delay tests for a collection of configurations.
   Future<Map<String, NodeTestResult>> testNodesBatchRealProxy(
     List<ProxyNode> nodes, {
     Duration timeout = const Duration(seconds: 4),

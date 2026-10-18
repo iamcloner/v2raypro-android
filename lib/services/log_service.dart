@@ -5,6 +5,8 @@ import "package:flutter/services.dart";
 import "package:path_provider/path_provider.dart";
 import "../models/log_entry.dart";
 
+export "../models/log_entry.dart";
+
 class LogService {
   static final LogService instance = LogService._();
   LogService._();

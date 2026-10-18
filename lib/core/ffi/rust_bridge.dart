@@ -1,7 +1,10 @@
+// File: lib/core/ffi/rust_bridge.dart
+// Description: FFI communication bridge for the C/Rust native module in Android.
+// Executes high-performance scanning and falls back to an internal Dart simulator if absent.
+
 import "dart:async";
 import "dart:convert";
 import "dart:ffi" as ffi;
-import "dart:io";
 import "package:ffi/ffi.dart";
 import "../../models/scan_result.dart";
 
@@ -21,36 +24,34 @@ typedef DartVoidFunc = void Function();
 typedef NativeApplyIp = ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 typedef DartApplyIp = ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 
+/// FFI bridge to the native Rust core library on Android.
+/// Coordinates high-speed scanning, event streams, and cancellation requests.
 class RustBridge {
   static final RustBridge instance = RustBridge._internal();
   RustBridge._internal();
 
   ffi.DynamicLibrary? _dylib;
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
+
+  /// Live stream of scan progress events and candidate results.
   Stream<Map<String, dynamic>> get eventStream => _eventController.stream;
 
   bool _initialized = false;
 
+  /// Initializes and loads the dynamic library on Android (libv2raypro_core.so).
   void initialize({String? libPath}) {
     if (_initialized) return;
 
     try {
-      if (Platform.isWindows) {
-        final path = libPath ?? "v2raypro_core.dll";
-        if (File(path).existsSync()) {
-          _dylib = ffi.DynamicLibrary.open(path);
-        }
-      } else if (Platform.isAndroid) {
-        _dylib = ffi.DynamicLibrary.open("libv2raypro_core.so");
-      }
-    } catch (e) {
-      // Fallback to pure Dart mock mode if dynamic library is not yet compiled
+      _dylib = ffi.DynamicLibrary.open(libPath ?? "libv2raypro_core.so");
+    } catch (_) {
+      // Fallback to simulator mode if native library is unavailable.
     }
 
     _initialized = true;
   }
 
-  /// Start scanning Cloudflare candidate IPs (native or simulated mock)
+  /// Starts IP candidate scanning using either the native core or the Dart simulator.
   Future<void> startScan({
     int candidates = 50,
     int workers = 20,
@@ -83,10 +84,11 @@ class RustBridge {
       } catch (_) {}
     }
 
-    // High fidelity Dart fallback simulator for offline testing
+    // Fallback to Dart mock scan if native library is not loaded.
     _runDartMockScan(candidates);
   }
 
+  /// Cancels and terminates the active scan session.
   void cancelScan() {
     if (_dylib != null) {
       try {
@@ -97,6 +99,7 @@ class RustBridge {
     _eventController.add({"type": "ScanCancelled", "data": {}});
   }
 
+  /// Internal Dart simulator for testing and execution without native binaries.
   void _runDartMockScan(int total) async {
     _eventController.add({"type": "ScanStarted", "data": {"total": total}});
     for (int i = 1; i <= total; i++) {

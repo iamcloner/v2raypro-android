@@ -1,32 +1,65 @@
+﻿// =======================================================================
+// [File Name]: tun_service.dart
+// [Description]: Tunnel interface and VPN management service on Android.
+// Handles interaction with the native V2RayVpnService via MethodChannel
+// for establishing, disconnecting, routing traffic, and receiving VPN logs.
+// [Platform]: Android Native Proxy & VPN Client
+// =======================================================================
+
 import "dart:async";
-import "dart:ffi" as ffi;
 import "dart:io";
 import "package:flutter/services.dart";
 import "../models/service_models.dart";
 import "../models/log_entry.dart";
 import "log_service.dart";
 
-/// Dedicated TUN Service managing network tunnel interfaces,
-/// system routes, and Android VpnService.
+/// Service managing network tunnel and interaction with the native VpnService on Android.
+/// Responsible for establishing VPN sessions and coordinating traffic flow with the Xray core.
 class TunService {
+  /// Global singleton instance for application-wide access.
   static final TunService instance = TunService._internal();
+
+  /// Private internal constructor implementing the singleton pattern.
   TunService._internal();
 
+  /// Communication channel with Android Kotlin MainActivity and V2RayVpnService.
+  static const _androidChannel = MethodChannel("com.v2raypro.app/native");
+
+  /// Current network tunnel status (connected or disconnected).
   TunStatus _status = TunStatus.disconnect;
+
+  /// Retrieves current tunnel operating status.
   TunStatus get status => _status;
+
+  /// Quick check whether the network tunnel is connected.
   bool get isConnected => _status == TunStatus.connect;
 
+  /// Current local SOCKS socket port.
   int _currentSocksPort = 10999;
+
+  /// Current local HTTP proxy port.
   int _currentHttpPort = 10888;
+
+  /// Retrieves current SOCKS proxy port.
   int get socksPort => _currentSocksPort;
+
+  /// Retrieves current HTTP proxy port.
   int get httpPort => _currentHttpPort;
 
+  /// System proxy status flag (traffic is always routed on Android via TUN interface).
   bool _isSystemProxySet = false;
+
+  /// Retrieves system proxy status.
   bool get isSystemProxySet => _isSystemProxySet;
 
+  /// Callback for disconnect notification from Android notification.
   VoidCallback? onNotificationDisconnect;
 
-  /// Main interface matching diagram: Status (connect / disconnect), Http_port, Socks_port
+  /// Hash cache of synced logs to prevent duplicate Android log entries.
+  final Set<String> _syncedAndroidLogSet = <String>{};
+
+  /// Main method configuring tunnel state corresponding to VPN connect or disconnect requests.
+  /// Sends port parameters and configuration to the service when connecting.
   Future<bool> setStatus({
     required TunStatus status,
     required int socksPort,
@@ -62,7 +95,8 @@ class TunService {
     }
   }
 
-  /// Connect and activate the TUN / system routing interface
+  /// Initializes and activates the TUN interface via Android native service.
+  /// Transmits required core execution info and packet forwarding params to Kotlin layer.
   Future<bool> connect({
     required int socksPort,
     required int httpPort,
@@ -78,48 +112,39 @@ class TunService {
     _currentSocksPort = socksPort;
     _currentHttpPort = httpPort;
 
-    LogService.instance.add("TunService: activating TUN routing (Socks: $socksPort, Http: $httpPort)...", level: LogLevel.info, source: "tun");
+    LogService.instance.add(
+      "TunService: فعال‌سازی تونل شبکه در اندروید (SOCKS: $socksPort, HTTP: $httpPort)...",
+      level: LogLevel.info,
+      source: "tun",
+    );
 
-    if (Platform.isAndroid) {
-      return await _startAndroidTun(
-        socksPort: socksPort,
-        httpPort: httpPort,
-        notificationTitle: notificationTitle,
-        disconnectText: disconnectText,
-        configName: configName,
-        appRoutingMode: appRoutingMode,
-        appRoutingList: appRoutingList,
-        xrayBinary: xrayBinary,
-        configPath: configPath,
-        assetDir: assetDir,
-      );
-    } else if (Platform.isWindows) {
-      return await _startWindowsTun(socksPort: socksPort, httpPort: httpPort);
+    final started = await _startAndroidTun(
+      socksPort: socksPort,
+      httpPort: httpPort,
+      notificationTitle: notificationTitle,
+      disconnectText: disconnectText,
+      configName: configName,
+      appRoutingMode: appRoutingMode,
+      appRoutingList: appRoutingList,
+      xrayBinary: xrayBinary,
+      configPath: configPath,
+      assetDir: assetDir,
+    );
+
+    if (started) {
+      _status = TunStatus.connect;
     }
-
-    _status = TunStatus.connect;
-    return true;
+    return started;
   }
 
-  /// Disconnect and teardown the TUN / system routing interface
+  /// Stops the TUN service and releases Android device VPN interface.
   Future<void> disconnect() async {
-    LogService.instance.add("TunService: tearing down TUN interface...", level: LogLevel.info, source: "tun");
-
-    if (Platform.isAndroid) {
-      await _stopAndroidTun();
-    } else if (Platform.isWindows) {
-      await _stopWindowsTun();
-    }
-
+    LogService.instance.add("TunService: بستن اینترفیس وی‌پی‌ان...", level: LogLevel.info, source: "tun");
+    await _stopAndroidTun();
     _status = TunStatus.disconnect;
   }
 
-  // ========================================================
-  // Android-specific implementation
-  // ========================================================
-
-  static const _androidChannel = MethodChannel('com.v2raypro.app/native');
-
+  /// Sends request to launch Android VpnService via MethodChannel.
   Future<bool> _startAndroidTun({
     required int socksPort,
     required int httpPort,
@@ -134,64 +159,60 @@ class TunService {
   }) async {
     try {
       final payload = {
-        'configName': configName ?? notificationTitle ?? 'V2RayPro',
-        'nodeName': configName ?? notificationTitle ?? 'V2RayPro',
-        'isTun': true,
-        'socksPort': socksPort,
-        'httpPort': httpPort,
-        if (notificationTitle != null) 'notificationTitle': notificationTitle,
-        if (disconnectText != null) 'disconnectText': disconnectText,
-        if (appRoutingMode != null) 'appRoutingMode': appRoutingMode,
-        if (appRoutingList != null) 'appRoutingList': appRoutingList,
-        if (xrayBinary != null) 'xrayBinary': xrayBinary,
-        if (configPath != null) 'configPath': configPath,
-        if (assetDir != null) 'assetDir': assetDir,
+        "configName": configName ?? notificationTitle ?? "V2RayPro",
+        "nodeName": configName ?? notificationTitle ?? "V2RayPro",
+        "isTun": true,
+        "socksPort": socksPort,
+        "httpPort": httpPort,
+        if (notificationTitle != null) "notificationTitle": notificationTitle,
+        if (disconnectText != null) "disconnectText": disconnectText,
+        if (appRoutingMode != null) "appRoutingMode": appRoutingMode,
+        if (appRoutingList != null) "appRoutingList": appRoutingList,
+        if (xrayBinary != null) "xrayBinary": xrayBinary,
+        if (configPath != null) "configPath": configPath,
+        if (assetDir != null) "assetDir": assetDir,
       };
 
       bool? res;
       try {
-        res = await _androidChannel.invokeMethod<bool>('startVpnService', payload);
+        res = await _androidChannel.invokeMethod<bool>("startVpnService", payload);
       } catch (_) {
-        res = await _androidChannel.invokeMethod<bool>('startVpn', payload);
+        res = await _androidChannel.invokeMethod<bool>("startVpn", payload);
       }
-
-      final started = res ?? false;
-      if (started) {
-        _status = TunStatus.connect;
-      }
-      return started;
+      return res ?? false;
     } catch (e) {
-      LogService.instance.add("TunService: failed to start Android VPN: $e", level: LogLevel.error, source: "tun");
+      LogService.instance.add("TunService: خطا در استارت VPN اندروید: $e", level: LogLevel.error, source: "tun");
       return false;
     }
   }
 
+  /// Sends request to stop active VPN service to Android native layer.
   Future<void> _stopAndroidTun() async {
     try {
-      await _androidChannel.invokeMethod('stopVpnService');
+      await _androidChannel.invokeMethod("stopVpnService");
     } catch (_) {
       try {
-        await _androidChannel.invokeMethod('stopVpn');
+        await _androidChannel.invokeMethod("stopVpn");
       } catch (_) {}
     }
   }
 
-  final Set<String> _syncedAndroidLogSet = <String>{};
-
+  /// Pre-validates user authorization for VPN permission via Android system dialog.
   Future<bool> prepareAndroidVpn() async {
     if (!Platform.isAndroid) return true;
     try {
-      final res = await _androidChannel.invokeMethod<bool>('prepareVpn');
+      final res = await _androidChannel.invokeMethod<bool>("prepareVpn");
       return res ?? false;
     } catch (_) {
       return false;
     }
   }
 
+  /// Fetches logs captured in background Kotlin service and forwards them to app logger.
   Future<void> syncAndroidLogs() async {
     if (!Platform.isAndroid) return;
     try {
-      final lines = await _androidChannel.invokeMethod<List<dynamic>>('getRecentVpnLogs');
+      final lines = await _androidChannel.invokeMethod<List<dynamic>>("getRecentVpnLogs");
       if (lines != null && lines.isNotEmpty) {
         for (final raw in lines) {
           final line = raw.toString().trim();
@@ -211,75 +232,22 @@ class TunService {
     } catch (_) {}
   }
 
+  /// Checks online connectivity status of Android VPN service.
   Future<bool> isVpnActive() async {
     if (!Platform.isAndroid) return isConnected;
     try {
-      final res = await _androidChannel.invokeMethod<bool>('isVpnRunning');
+      final res = await _androidChannel.invokeMethod<bool>("isVpnRunning");
       return res ?? false;
     } catch (_) {
       return false;
     }
   }
 
+  /// Checks admin permissions (VPN permission is used on Android and always returns true).
+  bool isRunningAsAdmin() => true;
 
-  // ========================================================
-  // Windows-specific implementation
-  // ========================================================
-
-  Future<bool> _startWindowsTun({required int socksPort, required int httpPort}) async {
-    if (!isRunningAsAdmin()) {
-      LogService.instance.add("TunService: Administrator privileges required for Windows TUN.", level: LogLevel.warning, source: "tun");
-      return false;
-    }
-
-    try {
-      _status = TunStatus.connect;
-      LogService.instance.add("TunService: Windows TUN adapter routing active.", level: LogLevel.info, source: "tun");
-      return true;
-    } catch (e) {
-      LogService.instance.add("TunService: failed to configure Windows TUN: $e", level: LogLevel.error, source: "tun");
-      return false;
-    }
-  }
-
-  Future<void> _stopWindowsTun() async {
-    setWindowsSystemProxy(false);
-  }
-
-  bool isRunningAsAdmin() {
-    if (!Platform.isWindows) return true;
-    try {
-      final shell32 = ffi.DynamicLibrary.open("shell32.dll");
-      final isUserAnAdmin = shell32.lookupFunction<ffi.Int32 Function(), int Function()>("IsUserAnAdmin");
-      return isUserAnAdmin() != 0;
-    } catch (_) {
-      try {
-        final res = Process.runSync("net", ["session"], runInShell: true);
-        return res.exitCode == 0;
-      } catch (_) {
-        return false;
-      }
-    }
-  }
-
-  Future<void> restartAsAdmin() async {
-    if (!Platform.isWindows) return;
-    final exe = Platform.resolvedExecutable;
-    try {
-      await Process.start("powershell", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        'Start-Process -FilePath "$exe" -Verb RunAs',
-      ]);
-      exit(0);
-    } catch (e) {
-      LogService.instance.add("TunService: failed to restart as admin: $e", level: LogLevel.error, source: "tun");
-    }
-  }
-
+  /// Optional proxy reset method for interface compatibility.
   void setWindowsSystemProxy(bool enable, {int? port}) {
-    if (!Platform.isWindows) return;
     _isSystemProxySet = enable;
   }
 }

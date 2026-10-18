@@ -1,10 +1,23 @@
-import 'dart:io';
+// File: lib/widgets/config_form_tabs.dart
+// Description: Main tabbed form for creating and manually editing proxy configurations on Android.
+// Manages input fields and connects the controllers of each individual tab.
+// Includes Basic Info, Credentials & Encryption, Transport Layer, and TLS/Reality Security tabs.
+
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../core/l10n/translations.dart';
 import '../core/theme/app_theme.dart';
 import '../models/proxy_node.dart';
+import 'config_form/basic_tab.dart';
+import 'config_form/config_form_constants.dart';
+import 'config_form/encryption_tab.dart';
+import 'config_form/tls_tab.dart';
+import 'config_form/transport_tab.dart';
 
+/// Tabbed form widget for manually creating or editing a proxy node configuration.
+///
+/// Collects basic info, credentials, transport layer, and security settings across dedicated tabs
+/// to construct a complete [ProxyNode] object.
 class ConfigFormTabs extends StatefulWidget {
   final ProxyNode? initialNode;
   final String locale;
@@ -22,18 +35,18 @@ class ConfigFormTabs extends StatefulWidget {
 class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProviderStateMixin {
   late TabController tabController;
 
-  // Tab 1: Basic Info
+  // Tab 1 controllers: Basic info
   late TextEditingController nameController;
   late TextEditingController addressController;
   late TextEditingController portController;
 
-  // Tab 2: Encryption
+  // Tab 2 controllers: Credentials & Encryption
   late TextEditingController uuidController;
   String? selectedFlow;
   late TextEditingController cipherController;
   late bool enableMux;
 
-  // Tab 3: Transport
+  // Tab 3 controllers: Transport layer
   late ProtocolType selectedProtocol;
   late NetworkType selectedNetwork;
   late TextEditingController pathController;
@@ -44,7 +57,7 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
   String? selectedXhttpMode;
   late TextEditingController xhttpExtraController;
 
-  // Tab 4: TLS
+  // Tab 4 controllers: TLS & Reality security
   late SecurityType selectedSecurity;
   late TextEditingController sniController;
   String? selectedFingerprint;
@@ -57,57 +70,19 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
   late TextEditingController shortIdController;
   late TextEditingController spiderXController;
 
-  static const List<String> availableFlows = [
-    '',
-    'xtls-rprx-vision',
-    'xtls-rprx-vision-udp443',
-  ];
-
-  static const List<String> availableCiphers = [
-    'auto',
-    'none',
-    'zero',
-    'aes-128-gcm',
-    'aes-256-gcm',
-    'chacha20-poly1305',
-    '2022-blake3-aes-128-gcm',
-    '2022-blake3-aes-256-gcm',
-    '2022-blake3-chacha20-poly1305',
-  ];
-
-  static const List<String> availableFingerprints = [
-    'chrome',
-    'firefox',
-    'safari',
-    'ios',
-    'android',
-    'edge',
-    '360',
-    'qq',
-    'random',
-    'randomized',
-  ];
-
-  static const List<String> availableXhttpModes = [
-    'auto',
-    'packet-up',
-    'stream-up',
-    'stream-one',
-  ];
-
-  static const List<String> availableHeaderTypes = [
-    'none',
-    'http',
-  ];
+  static List<String> get availableFlows => ConfigFormConstants.availableFlows;
+  static List<String> get availableCiphers => ConfigFormConstants.availableCiphers;
+  static List<String> get availableFingerprints => ConfigFormConstants.availableFingerprints;
+  static List<String> get availableXhttpModes => ConfigFormConstants.availableXhttpModes;
+  static List<String> get availableHeaderTypes => ConfigFormConstants.availableHeaderTypes;
 
   @override
   void initState() {
     super.initState();
     tabController = TabController(length: 4, vsync: this);
-
     final n = widget.initialNode;
 
-    // Tab 1: Basic Info
+    // Tab 1: Basic info
     nameController = TextEditingController(text: n?.name ?? 'Custom Node');
     addressController = TextEditingController(text: n?.address ?? '');
     portController = TextEditingController(text: (n?.port ?? 443).toString());
@@ -129,7 +104,7 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
     selectedXhttpMode = (n?.mode != null && n!.mode!.isNotEmpty) ? n.mode! : 'auto';
     xhttpExtraController = TextEditingController(text: n?.extra ?? '');
 
-    // Tab 4: TLS
+    // Tab 4: Security
     selectedSecurity = n?.security ?? SecurityType.tls;
     sniController = TextEditingController(text: n?.sni ?? '');
     selectedFingerprint = (n?.fingerprint != null && n!.fingerprint!.isNotEmpty) ? n.fingerprint! : 'chrome';
@@ -166,16 +141,17 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
     super.dispose();
   }
 
+  /// Validates user input across required fields.
   String? validate() {
     if (addressController.text.trim().isEmpty) {
-      return AppStrings.get('server_address', locale: widget.locale) + ' is required';
+      return '${AppStrings.get('server_address', locale: widget.locale)} is required';
     }
     final p = int.tryParse(portController.text.trim());
     if (p == null || p <= 0 || p > 65535) {
       return 'Port must be a valid number between 1 and 65535';
     }
     if (uuidController.text.trim().isEmpty) {
-      return AppStrings.get('uuid_password', locale: widget.locale) + ' is required';
+      return '${AppStrings.get('uuid_password', locale: widget.locale)} is required';
     }
     if (selectedSecurity == SecurityType.reality && publicKeyController.text.trim().isEmpty) {
       return 'Reality Public Key (pbk) is required for Reality mode';
@@ -183,6 +159,7 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
     return null;
   }
 
+  /// Constructs the final [ProxyNode] object from the populated form fields.
   ProxyNode buildNode({String? id, bool isActive = false}) {
     final original = widget.initialNode;
     final port = int.tryParse(portController.text.trim()) ?? 443;
@@ -242,7 +219,7 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
     final loc = widget.locale;
 
     return SizedBox(
-      width: Platform.isAndroid ? double.infinity : 580,
+      width: double.infinity,
       height: 490,
       child: Column(
         children: [
@@ -253,21 +230,15 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
             ),
             child: TabBar(
               controller: tabController,
-              isScrollable: Platform.isAndroid,
-              tabAlignment: Platform.isAndroid ? TabAlignment.start : null,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
               labelColor: AppTheme.primaryAccent,
               unselectedLabelColor: Colors.grey.shade400,
               indicatorColor: AppTheme.primaryAccent,
               indicatorSize: TabBarIndicatorSize.tab,
-              labelPadding: EdgeInsets.symmetric(horizontal: Platform.isAndroid ? 12 : 16),
-              labelStyle: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: Platform.isAndroid ? 12.5 : 13,
-              ),
-              unselectedLabelStyle: TextStyle(
-                fontWeight: FontWeight.normal,
-                fontSize: Platform.isAndroid ? 12 : 13,
-              ),
+              labelPadding: const EdgeInsets.symmetric(horizontal: 12),
+              labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+              unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.normal, fontSize: 12),
               tabs: [
                 Tab(
                   icon: const Icon(Icons.info_outline_rounded, size: 18),
@@ -293,529 +264,69 @@ class ConfigFormTabsState extends State<ConfigFormTabs> with SingleTickerProvide
             child: TabBarView(
               controller: tabController,
               children: [
-                _buildBasicInfoTab(loc),
-                _buildEncryptionTab(loc),
-                _buildTransportTab(loc),
-                _buildTlsTab(loc),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBasicInfoTab(String loc) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: nameController,
-            decoration: InputDecoration(
-              labelText: AppStrings.get('alias_remark', locale: loc),
-              hintText: 'e.g. My Fast VPS',
-              prefixIcon: const Icon(Icons.label_rounded, size: 20),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: addressController,
-            decoration: InputDecoration(
-              labelText: AppStrings.get('server_address', locale: loc),
-              hintText: '198.51.100.1 or mydomain.com',
-              prefixIcon: const Icon(Icons.dns_rounded, size: 20),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: portController,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: AppStrings.get('server_port', locale: loc),
-              hintText: '443',
-              prefixIcon: const Icon(Icons.tag_rounded, size: 20),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEncryptionTab(String loc) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: uuidController,
-            decoration: InputDecoration(
-              labelText: AppStrings.get('uuid_password', locale: loc),
-              prefixIcon: const Icon(Icons.key_rounded, size: 20),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                tooltip: 'Generate Random UUID',
-                onPressed: () {
-                  setState(() {
-                    uuidController.text = const Uuid().v4();
-                  });
-                },
-              ),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 16),
-          DropdownButtonFormField<String>(
-            value: (selectedFlow != null && availableFlows.contains(selectedFlow)) ? selectedFlow : '',
-            decoration: InputDecoration(
-              labelText: AppStrings.get('flow', locale: loc),
-              prefixIcon: const Icon(Icons.waves_rounded, size: 20),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-            items: const [
-              DropdownMenuItem(value: '', child: Text('None / Empty')),
-              DropdownMenuItem(value: 'xtls-rprx-vision', child: Text('xtls-rprx-vision (Vision)')),
-              DropdownMenuItem(value: 'xtls-rprx-vision-udp443', child: Text('xtls-rprx-vision-udp443')),
-            ],
-            onChanged: (val) {
-              setState(() => selectedFlow = val);
-            },
-          ),
-          const SizedBox(height: 16),
-          Autocomplete<String>(
-            initialValue: TextEditingValue(text: cipherController.text),
-            optionsBuilder: (textVal) {
-              if (textVal.text.isEmpty) return availableCiphers;
-              return availableCiphers.where((c) => c.toLowerCase().contains(textVal.text.toLowerCase()));
-            },
-            onSelected: (val) {
-              cipherController.text = val;
-            },
-            fieldViewBuilder: (ctx, controller, focusNode, onFieldSubmitted) {
-              controller.addListener(() {
-                cipherController.text = controller.text;
-              });
-              return TextField(
-                controller: controller,
-                focusNode: focusNode,
-                decoration: InputDecoration(
-                  labelText: AppStrings.get('cipher_encryption', locale: loc),
-                  prefixIcon: const Icon(Icons.lock_clock_rounded, size: 20),
-                  border: const OutlineInputBorder(),
-                  isDense: true,
+                BasicTab(
+                  nameController: nameController,
+                  addressController: addressController,
+                  portController: portController,
+                  locale: loc,
                 ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            secondary: const Icon(Icons.merge_type_rounded, color: AppTheme.primaryAccent),
-            title: Text(
-              AppStrings.get('enable_mux', locale: loc),
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-            ),
-            subtitle: Text(
-              AppStrings.get('enable_mux_desc', locale: loc),
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
-            ),
-            value: enableMux,
-            onChanged: (val) => setState(() => enableMux = val),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTransportTab(String loc) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<ProtocolType>(
-                  value: selectedProtocol,
-                  decoration: InputDecoration(
-                    labelText: AppStrings.get('protocol', locale: loc),
-                    prefixIcon: const Icon(Icons.layers_rounded, size: 20),
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: ProtocolType.values
-                      .map((p) => DropdownMenuItem(
-                            value: p,
-                            child: Text(p.name.toUpperCase()),
-                          ))
-                      .toList(),
-                  onChanged: (val) {
+                EncryptionTab(
+                  uuidController: uuidController,
+                  selectedFlow: selectedFlow,
+                  cipherController: cipherController,
+                  enableMux: enableMux,
+                  availableFlows: availableFlows,
+                  availableCiphers: availableCiphers,
+                  locale: loc,
+                  onFlowChanged: (val) => setState(() => selectedFlow = val),
+                  onMuxChanged: (val) => setState(() => enableMux = val),
+                ),
+                TransportTab(
+                  selectedProtocol: selectedProtocol,
+                  selectedNetwork: selectedNetwork,
+                  pathController: pathController,
+                  hostController: hostController,
+                  serviceNameController: serviceNameController,
+                  grpcMultiMode: grpcMultiMode,
+                  selectedHeaderType: selectedHeaderType,
+                  selectedXhttpMode: selectedXhttpMode,
+                  xhttpExtraController: xhttpExtraController,
+                  availableHeaderTypes: availableHeaderTypes,
+                  availableXhttpModes: availableXhttpModes,
+                  locale: loc,
+                  onProtocolChanged: (val) {
                     if (val != null) setState(() => selectedProtocol = val);
                   },
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: DropdownButtonFormField<NetworkType>(
-                  value: selectedNetwork,
-                  decoration: InputDecoration(
-                    labelText: AppStrings.get('transport_network', locale: loc),
-                    prefixIcon: const Icon(Icons.router_rounded, size: 20),
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: NetworkType.values
-                      .map((n) => DropdownMenuItem(
-                            value: n,
-                            child: Text(n.name.toUpperCase()),
-                          ))
-                      .toList(),
-                  onChanged: (val) {
+                  onNetworkChanged: (val) {
                     if (val != null) setState(() => selectedNetwork = val);
                   },
+                  onGrpcMultiModeChanged: (val) => setState(() => grpcMultiMode = val),
+                  onHeaderTypeChanged: (val) => setState(() => selectedHeaderType = val),
+                  onXhttpModeChanged: (val) => setState(() => selectedXhttpMode = val),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Dynamic Transport Fields based on NetworkType:
-          if (selectedNetwork == NetworkType.ws || selectedNetwork == NetworkType.httpUpgrade || selectedNetwork == NetworkType.h2) ...[
-            TextField(
-              controller: pathController,
-              decoration: const InputDecoration(
-                labelText: 'Path (e.g. / or /ws)',
-                prefixIcon: Icon(Icons.alt_route_rounded, size: 20),
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: hostController,
-              decoration: const InputDecoration(
-                labelText: 'Host header (e.g. cdn.example.com)',
-                prefixIcon: Icon(Icons.language_rounded, size: 20),
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-          ] else if (selectedNetwork == NetworkType.grpc) ...[
-            TextField(
-              controller: serviceNameController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('service_name', locale: loc),
-                hintText: 'e.g. v2ray-grpc',
-                prefixIcon: const Icon(Icons.cloud_sync_rounded, size: 20),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 10),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: Text(AppStrings.get('multi_mode', locale: loc)),
-              value: grpcMultiMode,
-              onChanged: (val) => setState(() => grpcMultiMode = val),
-            ),
-          ] else if (selectedNetwork == NetworkType.xhttp || selectedNetwork == NetworkType.splithttp) ...[
-            TextField(
-              controller: pathController,
-              decoration: const InputDecoration(
-                labelText: 'Path (e.g. /xhttp)',
-                prefixIcon: Icon(Icons.alt_route_rounded, size: 20),
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: hostController,
-              decoration: const InputDecoration(
-                labelText: 'Host header',
-                prefixIcon: Icon(Icons.language_rounded, size: 20),
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: selectedXhttpMode,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('xhttp_mode', locale: loc),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: availableXhttpModes
-                  .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                  .toList(),
-              onChanged: (val) => setState(() => selectedXhttpMode = val),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: xhttpExtraController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('xhttp_extra', locale: loc),
-                hintText: '{"noSSEHeader": false}',
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-          ] else if (selectedNetwork == NetworkType.tcp) ...[
-            DropdownButtonFormField<String>(
-              value: selectedHeaderType,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('header_type', locale: loc),
-                prefixIcon: const Icon(Icons.code_rounded, size: 20),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: availableHeaderTypes
-                  .map((h) => DropdownMenuItem(value: h, child: Text(h.toUpperCase())))
-                  .toList(),
-              onChanged: (val) => setState(() => selectedHeaderType = val),
-            ),
-            if (selectedHeaderType == 'http') ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: pathController,
-                decoration: const InputDecoration(
-                  labelText: 'HTTP Request Path (e.g. /)',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: hostController,
-                decoration: const InputDecoration(
-                  labelText: 'HTTP Host Header',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-            ],
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTlsTab(String loc) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          DropdownButtonFormField<SecurityType>(
-            value: selectedSecurity,
-            decoration: InputDecoration(
-              labelText: AppStrings.get('tls_mode', locale: loc),
-              prefixIcon: const Icon(Icons.shield_outlined, size: 20),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-            items: SecurityType.values
-                .map((s) => DropdownMenuItem(
-                      value: s,
-                      child: Text(s.name.toUpperCase()),
-                    ))
-                .toList(),
-            onChanged: (val) {
-              if (val != null) setState(() => selectedSecurity = val);
-            },
-          ),
-          const SizedBox(height: 16),
-
-          if (selectedSecurity == SecurityType.none)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.amber.withValues(alpha: 0.1),
-                border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline_rounded, color: Colors.amber),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      AppStrings.get('tls_none_hint', locale: loc),
-                      style: const TextStyle(fontSize: 12, color: Colors.amber),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          if (selectedSecurity == SecurityType.tls) ...[
-            TextField(
-              controller: sniController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('sni_servername', locale: loc),
-                hintText: 'e.g. example.com',
-                prefixIcon: const Icon(Icons.link_rounded, size: 20),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    value: availableFingerprints.contains(selectedFingerprint) ? selectedFingerprint : 'chrome',
-                    decoration: InputDecoration(
-                      labelText: AppStrings.get('fingerprint', locale: loc),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    items: availableFingerprints
-                        .map((f) => DropdownMenuItem(value: f, child: Text(f)))
-                        .toList(),
-                    onChanged: (val) => setState(() => selectedFingerprint = val),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: alpnController,
-                    decoration: InputDecoration(
-                      labelText: AppStrings.get('alpn', locale: loc),
-                      hintText: 'h2,http/1.1',
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                  ),
+                TlsTab(
+                  selectedSecurity: selectedSecurity,
+                  sniController: sniController,
+                  selectedFingerprint: selectedFingerprint,
+                  alpnController: alpnController,
+                  allowInsecure: allowInsecure,
+                  echConfigListController: echConfigListController,
+                  verifyPeerCertByNameController: verifyPeerCertByNameController,
+                  certificatePinningController: certificatePinningController,
+                  publicKeyController: publicKeyController,
+                  shortIdController: shortIdController,
+                  spiderXController: spiderXController,
+                  availableFingerprints: availableFingerprints,
+                  locale: loc,
+                  onSecurityChanged: (val) {
+                    if (val != null) setState(() => selectedSecurity = val);
+                  },
+                  onFingerprintChanged: (val) => setState(() => selectedFingerprint = val),
+                  onAllowInsecureChanged: (val) => setState(() => allowInsecure = val),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: Text(
-                AppStrings.get('allow_insecure', locale: loc),
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                AppStrings.get('allow_insecure_desc', locale: loc),
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
-              ),
-              value: allowInsecure,
-              onChanged: (val) => setState(() => allowInsecure = val),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: echConfigListController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('ech_config_list', locale: loc),
-                hintText: 'Base64 encoded ECH configs',
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: verifyPeerCertByNameController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('verify_peer_cert', locale: loc),
-                hintText: 'Expected certificate subject name',
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: certificatePinningController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('cert_pinning', locale: loc),
-                hintText: 'SHA-256 public key hash',
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-          ],
-
-          if (selectedSecurity == SecurityType.reality) ...[
-            TextField(
-              controller: sniController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('sni_servername', locale: loc),
-                hintText: 'e.g. play.google.com, yahoo.com',
-                prefixIcon: const Icon(Icons.link_rounded, size: 20),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    value: availableFingerprints.contains(selectedFingerprint) ? selectedFingerprint : 'chrome',
-                    decoration: InputDecoration(
-                      labelText: AppStrings.get('fingerprint', locale: loc),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    items: availableFingerprints
-                        .map((f) => DropdownMenuItem(value: f, child: Text(f)))
-                        .toList(),
-                    onChanged: (val) => setState(() => selectedFingerprint = val),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: spiderXController,
-                    decoration: InputDecoration(
-                      labelText: AppStrings.get('spider_x', locale: loc),
-                      hintText: '/',
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: publicKeyController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('public_key', locale: loc),
-                hintText: 'Reality Public Key (pbk)',
-                prefixIcon: const Icon(Icons.vpn_key_rounded, size: 20),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: shortIdController,
-              decoration: InputDecoration(
-                labelText: AppStrings.get('short_id', locale: loc),
-                hintText: 'Reality Short ID (sid)',
-                prefixIcon: const Icon(Icons.fingerprint_rounded, size: 20),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-          ],
+          ),
         ],
       ),
     );

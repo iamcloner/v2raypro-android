@@ -6,6 +6,7 @@ import 'package:v2raypro/models/proxy_node.dart';
 import 'package:v2raypro/providers/app_providers.dart';
 import 'package:v2raypro/services/real_delay_service.dart';
 import 'package:v2raypro/services/xray_process_service.dart';
+import 'package:v2raypro/utils/generators/xray_stream_builder.dart';
 
 void main() {
   group('v1.7.3 WebSocket Latency & Real Delay Tests', () {
@@ -133,6 +134,91 @@ void main() {
       expect(results.containsKey('batch_2'), isTrue);
       expect(results['batch_1']!.isSuccess, isTrue);
       expect(results['batch_2']!.isSuccess, isTrue);
+    });
+
+    test('testRealDelay in turbo mode skips real delay and fails quickly when IP ping fails', () async {
+      final deadNode = ProxyNode(
+        id: 'dead_turbo_node',
+        name: 'Dead Turbo Node',
+        protocol: ProtocolType.vless,
+        address: '192.0.2.1',
+        port: 443,
+        uuidOrPassword: 'dummy',
+      );
+
+      final sw = Stopwatch()..start();
+      final result = await testRealDelay(
+        mode: 'turbo',
+        type: 'xray',
+        config: deadNode.toJson(),
+        timeout: const Duration(milliseconds: 300),
+      );
+      sw.stop();
+
+      expect(result.ping, isNull);
+      expect(result.isSuccess, isFalse);
+      expect(sw.elapsedMilliseconds, lessThan(1500));
+    });
+
+    test('RealDelayBatchRunner worker pool immediately replaces completed items', () async {
+      final orderOfStarts = <String>[];
+      final orderOfFinishes = <String>[];
+
+      final nodes = [
+        ProxyNode(id: 'node_1', name: 'N1', protocol: ProtocolType.vless, address: '127.0.0.1', port: 80, uuidOrPassword: 'u'),
+        ProxyNode(id: 'node_2', name: 'N2', protocol: ProtocolType.vless, address: '127.0.0.1', port: 80, uuidOrPassword: 'u'),
+        ProxyNode(id: 'node_3', name: 'N3', protocol: ProtocolType.vless, address: '127.0.0.1', port: 80, uuidOrPassword: 'u'),
+      ];
+
+      // Concurrency 2: node_1 finishes quickly (10ms), node_2 takes 80ms.
+      // As soon as node_1 finishes, node_3 must start immediately before node_2 finishes!
+      final res = await RealDelayBatchRunner.runBatch(
+        nodes: nodes,
+        effectiveTimeout: const Duration(seconds: 1),
+        isTurbo: true,
+        concurrency: 2,
+        testSingleNode: (node, timeout, turbo) async {
+          orderOfStarts.add(node.id);
+          if (node.id == 'node_1') {
+            await Future.delayed(const Duration(milliseconds: 10));
+          } else if (node.id == 'node_2') {
+            await Future.delayed(const Duration(milliseconds: 80));
+          } else {
+            await Future.delayed(const Duration(milliseconds: 20));
+          }
+          orderOfFinishes.add(node.id);
+          return const RealDelayResult(ping: 50, country: 'us');
+        },
+      );
+
+      expect(res.length, equals(3));
+      expect(orderOfFinishes.first, equals('node_1'));
+      // node_3 must have started while node_2 was still running
+      expect(orderOfStarts, equals(['node_1', 'node_2', 'node_3']));
+    });
+
+    test('XrayStreamBuilder configures maxEarlyData 2048 when ed= is present in path', () {
+      final wsNodeWithEd = ProxyNode(
+        id: 'ws_ed_test',
+        name: 'WS Early Data',
+        protocol: ProtocolType.vless,
+        address: '1.1.1.1',
+        port: 443,
+        uuidOrPassword: 'test-uuid',
+        network: NetworkType.ws,
+        path: '/ws?ed=2048',
+        host: 'example.com',
+        security: SecurityType.tls,
+        sni: 'example.com',
+      );
+
+      final streamSettings = XrayStreamBuilder.build(wsNodeWithEd);
+      expect(streamSettings['network'], equals('ws'));
+      expect(streamSettings['wsSettings'], isNotNull);
+      final wsSettings = streamSettings['wsSettings'] as Map<String, dynamic>;
+      expect(wsSettings['path'], equals('/ws?ed=2048'));
+      expect(wsSettings.containsKey('maxEarlyData'), isFalse);
+      expect(wsSettings['headers']['Host'], equals('example.com'));
     });
   });
 }

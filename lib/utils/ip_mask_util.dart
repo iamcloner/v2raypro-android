@@ -1,4 +1,7 @@
-﻿class IpMaskUtil {
+// File: lib/utils/ip_mask_util.dart
+// Description: Utility for masking IP addresses and domain names for user privacy.
+
+class IpMaskUtil {
   static String mask(String input, {bool showFull = false}) {
     if (showFull || input.trim().isEmpty) return input;
     final trimmed = input.trim();

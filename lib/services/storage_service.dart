@@ -1,3 +1,11 @@
+// =======================================================================
+// [File Name]: storage_service.dart
+// [Description]: Primary data and settings storage service on Android.
+// Manages persistence of nodes, subscriptions, routes, proxy configuration,
+// DNS settings, and UI appearance, with underlying disk backups.
+// [Platform]: Android Native Proxy & VPN Client
+// =======================================================================
+
 import "dart:async";
 import "dart:convert";
 import "dart:io";
@@ -7,185 +15,57 @@ import "../models/proxy_node.dart";
 import "../models/routing_rule.dart";
 import "../models/subscription_item.dart";
 import "cdn_scanner_service.dart";
+import "config_disk_storage.dart";
+import "session_storage.dart";
 
+export "config_disk_storage.dart";
+export "session_storage.dart";
+
+/// Service managing persistent storage and configuration loading on Android.
 class StorageService {
+  /// Singleton instance of StorageService.
   static final StorageService instance = StorageService._internal();
   StorageService._internal();
 
-  Timer? _nodesDebounceTimer;
-  Timer? _subsDebounceTimer;
-
-  static const _nodesKey = "v2raypro_saved_nodes";
-  static const _subsKey = "v2raypro_saved_subs";
   static const _sysProxyKey = "v2raypro_sys_proxy";
   static const _tunKey = "v2raypro_tun_mode";
   static const _httpPortKey = "v2raypro_http_port";
   static const _socksPortKey = "v2raypro_socks_port";
-  static const _freeConfigsKey = "v2raypro_saved_free_configs";
   static const _allowInsecureKey = "v2raypro_global_allow_insecure";
   static const _enableMuxKey = "v2raypro_global_enable_mux";
   static const _allowLanKey = "v2raypro_allow_lan";
-  static const _routingRulesKey = "v2raypro_routing_rules";
   static const _appRoutingModeKey = "v2raypro_app_routing_mode";
 
-  File _getBackupFile(String filename) {
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final configDir = Directory("$exeDir/config");
-    final configTarget = File("${configDir.path}/$filename");
-    final legacyRoot = File("$exeDir/$filename");
+  /// Retrieves path to local JSON backup file on device storage.
+  File _getBackupFile(String filename) => ConfigDiskStorage.instance.getBackupFile(filename);
 
-    try {
-      if (!configDir.existsSync()) {
-        configDir.createSync(recursive: true);
-      }
-      // Migrate legacy file if it exists at root but not yet in config/
-      if (legacyRoot.existsSync() && !configTarget.existsSync()) {
-        try {
-          legacyRoot.copySync(configTarget.path);
-        } catch (_) {}
-      }
-      return configTarget;
-    } catch (_) {
-      // Fallback to legacy root or temp
-      if (legacyRoot.existsSync()) {
-        return legacyRoot;
-      }
-      final tmp = Directory.systemTemp.path;
-      return File("$tmp/$filename");
-    }
-  }
+  /// Saves user proxy node list with debouncing to prevent excessive disk writes.
+  Future<void> saveNodes(List<ProxyNode> nodes, {bool immediate = false}) =>
+      ConfigDiskStorage.instance.saveNodes(nodes, immediate: immediate);
 
-  Future<void> saveNodes(List<ProxyNode> nodes, {bool immediate = false}) async {
-    _nodesDebounceTimer?.cancel();
-    if (immediate) {
-      await _writeNodesToDisk(nodes);
-    } else {
-      _nodesDebounceTimer = Timer(const Duration(milliseconds: 400), () {
-        _writeNodesToDisk(nodes);
-      });
-    }
-  }
+  /// Loads saved proxy node list from disk and SharedPreferences.
+  Future<List<ProxyNode>> loadNodes() => ConfigDiskStorage.instance.loadNodes();
 
-  Future<void> _writeNodesToDisk(List<ProxyNode> nodes) async {
-    try {
-      final jsonList = nodes.map((n) => n.toJson()).toList();
-      final str = jsonEncode(jsonList);
+  /// Saves user subscription links list.
+  Future<void> saveSubscriptions(List<SubscriptionItem> subs, {bool immediate = false}) =>
+      ConfigDiskStorage.instance.saveSubscriptions(subs, immediate: immediate);
 
-      final file = _getBackupFile("v2raypro_nodes.json");
-      await file.writeAsString(str);
+  /// Loads saved subscription links list in the application.
+  Future<List<SubscriptionItem>> loadSubscriptions() => ConfigDiskStorage.instance.loadSubscriptions();
 
-      // Only sync to SharedPreferences if payload is small (<64KB) to avoid Windows Registry size limits/crashes
-      if (str.length < 65536) {
-        final sp = await SharedPreferences.getInstance();
-        await sp.setString(_nodesKey, str);
-      }
-    } catch (_) {}
-  }
+  /// Saves free configs fetched from online repository.
+  Future<void> saveFreeConfigs(List<ProxyNode> nodes) => ConfigDiskStorage.instance.saveFreeConfigs(nodes);
 
-  Future<List<ProxyNode>> loadNodes() async {
-    try {
-      String? content;
-      final file = _getBackupFile("v2raypro_nodes.json");
-      if (await file.exists()) {
-        content = await file.readAsString();
-      }
+  /// Retrieves previously saved free configs.
+  Future<List<ProxyNode>> loadFreeConfigs() => ConfigDiskStorage.instance.loadFreeConfigs();
 
-      if (content == null || content.isEmpty) {
-        final sp = await SharedPreferences.getInstance();
-        content = sp.getString(_nodesKey);
-      }
+  /// Saves list of traffic routing rules.
+  Future<void> saveRoutingRules(List<RoutingRule> rules) => ConfigDiskStorage.instance.saveRoutingRules(rules);
 
-      if (content != null && content.isNotEmpty) {
-        final decoded = jsonDecode(content) as List;
-        return decoded.map((e) => ProxyNode.fromJson(e as Map<String, dynamic>)).toList();
-      }
-    } catch (_) {}
-    return [];
-  }
+  /// Loads list of traffic routing rules.
+  Future<List<RoutingRule>> loadRoutingRules() => ConfigDiskStorage.instance.loadRoutingRules();
 
-  Future<void> saveSubscriptions(List<SubscriptionItem> subs, {bool immediate = false}) async {
-    _subsDebounceTimer?.cancel();
-    if (immediate) {
-      await _writeSubscriptionsToDisk(subs);
-    } else {
-      _subsDebounceTimer = Timer(const Duration(milliseconds: 400), () {
-        _writeSubscriptionsToDisk(subs);
-      });
-    }
-  }
-
-  Future<void> _writeSubscriptionsToDisk(List<SubscriptionItem> subs) async {
-    try {
-      final jsonList = subs.map((s) => s.toJson()).toList();
-      final str = jsonEncode(jsonList);
-
-      final file = _getBackupFile("v2raypro_subs.json");
-      await file.writeAsString(str);
-
-      if (str.length < 65536) {
-        final sp = await SharedPreferences.getInstance();
-        await sp.setString(_subsKey, str);
-      }
-    } catch (_) {}
-  }
-
-  Future<List<SubscriptionItem>> loadSubscriptions() async {
-    try {
-      String? content;
-      final file = _getBackupFile("v2raypro_subs.json");
-      if (await file.exists()) {
-        content = await file.readAsString();
-      }
-
-      if (content == null || content.isEmpty) {
-        final sp = await SharedPreferences.getInstance();
-        content = sp.getString(_subsKey);
-      }
-
-      if (content != null && content.isNotEmpty) {
-        final decoded = jsonDecode(content) as List;
-        return decoded.map((e) => SubscriptionItem.fromJson(e as Map<String, dynamic>)).toList();
-      }
-    } catch (_) {}
-    return [];
-  }
-
-  Future<void> saveFreeConfigs(List<ProxyNode> nodes) async {
-    try {
-      final jsonList = nodes.map((n) => n.toJson()).toList();
-      final str = jsonEncode(jsonList);
-
-      final file = _getBackupFile("v2raypro_free_configs.json");
-      await file.writeAsString(str);
-
-      if (str.length < 65536) {
-        final sp = await SharedPreferences.getInstance();
-        await sp.setString(_freeConfigsKey, str);
-      }
-    } catch (_) {}
-  }
-
-  Future<List<ProxyNode>> loadFreeConfigs() async {
-    try {
-      String? content;
-      final file = _getBackupFile("v2raypro_free_configs.json");
-      if (await file.exists()) {
-        content = await file.readAsString();
-      }
-
-      if (content == null || content.isEmpty) {
-        final sp = await SharedPreferences.getInstance();
-        content = sp.getString(_freeConfigsKey);
-      }
-
-      if (content != null && content.isNotEmpty) {
-        final decoded = jsonDecode(content) as List;
-        return decoded.map((e) => ProxyNode.fromJson(e as Map<String, dynamic>)).toList();
-      }
-    } catch (_) {}
-    return [];
-  }
-
+  /// Basic helper methods for reading and writing boolean values.
   Future<void> saveBool(String key, bool val) async {
     try {
       final sp = await SharedPreferences.getInstance();
@@ -206,7 +86,7 @@ class StorageService {
   Future<bool> loadSystemProxyEnabled() => loadBool(_sysProxyKey, defaultValue: false);
 
   Future<void> saveTunEnabled(bool val) => saveBool(_tunKey, val);
-  Future<bool> loadTunEnabled() => loadBool(_tunKey, defaultValue: Platform.isAndroid ? true : false);
+  Future<bool> loadTunEnabled() => loadBool(_tunKey, defaultValue: true);
 
   Future<void> saveGlobalAllowInsecure(bool val) => saveBool(_allowInsecureKey, val);
   Future<bool> loadGlobalAllowInsecure() => loadBool(_allowInsecureKey, defaultValue: false);
@@ -217,41 +97,7 @@ class StorageService {
   Future<void> saveAllowLan(bool val) => saveBool(_allowLanKey, val);
   Future<bool> loadAllowLan() => loadBool(_allowLanKey, defaultValue: false);
 
-  Future<void> saveRoutingRules(List<RoutingRule> rules) async {
-    try {
-      final jsonList = rules.map((r) => r.toJson()).toList();
-      final str = jsonEncode(jsonList);
-      final file = _getBackupFile("v2raypro_routing_rules.json");
-      await file.writeAsString(str);
-
-      if (str.length < 65536) {
-        final sp = await SharedPreferences.getInstance();
-        await sp.setString(_routingRulesKey, str);
-      }
-    } catch (_) {}
-  }
-
-  Future<List<RoutingRule>> loadRoutingRules() async {
-    try {
-      String? content;
-      final file = _getBackupFile("v2raypro_routing_rules.json");
-      if (await file.exists()) {
-        content = await file.readAsString();
-      }
-
-      if (content == null || content.isEmpty) {
-        final sp = await SharedPreferences.getInstance();
-        content = sp.getString(_routingRulesKey);
-      }
-
-      if (content != null && content.isNotEmpty) {
-        final decoded = jsonDecode(content) as List;
-        return decoded.map((e) => RoutingRule.fromJson(e as Map<String, dynamic>)).toList();
-      }
-    } catch (_) {}
-    return [];
-  }
-
+  /// Saves per-app routing mode (bypass or allow list).
   Future<void> saveAppRoutingMode(AppRoutingMode mode) async {
     try {
       final sp = await SharedPreferences.getInstance();
@@ -259,6 +105,7 @@ class StorageService {
     } catch (_) {}
   }
 
+  /// Loads per-app routing mode.
   Future<AppRoutingMode> loadAppRoutingMode() async {
     try {
       final sp = await SharedPreferences.getInstance();
@@ -273,6 +120,7 @@ class StorageService {
     return AppRoutingMode.exclusive;
   }
 
+  /// Saves dedicated CDN IP ranges.
   Future<void> saveCdnRanges(CdnProvider provider, List<String> ranges) async {
     try {
       final key = "v2raypro_${provider.id}_ranges";
@@ -285,6 +133,7 @@ class StorageService {
     } catch (_) {}
   }
 
+  /// Loads configured CDN IP ranges.
   Future<List<String>> loadCdnRanges(CdnProvider provider) async {
     try {
       final key = "v2raypro_${provider.id}_ranges";
@@ -307,12 +156,10 @@ class StorageService {
     return provider.defaultCidrs;
   }
 
-  Future<void> saveCloudflareRanges(List<String> ranges) =>
-      saveCdnRanges(CdnProvider.cloudflare, ranges);
+  Future<void> saveCloudflareRanges(List<String> ranges) => saveCdnRanges(CdnProvider.cloudflare, ranges);
+  Future<List<String>> loadCloudflareRanges() => loadCdnRanges(CdnProvider.cloudflare);
 
-  Future<List<String>> loadCloudflareRanges() =>
-      loadCdnRanges(CdnProvider.cloudflare);
-
+  /// Saves custom DNS settings.
   Future<void> saveDnsSettings(DnsSettings settings) async {
     try {
       final str = jsonEncode(settings.toJson());
@@ -324,6 +171,7 @@ class StorageService {
     } catch (_) {}
   }
 
+  /// Retrieves custom DNS settings.
   Future<DnsSettings> loadDnsSettings() async {
     try {
       String? content;
@@ -345,6 +193,7 @@ class StorageService {
     return const DnsSettings();
   }
 
+  /// Helper methods for saving and loading integers and strings.
   Future<void> saveInt(String key, int val) async {
     try {
       final sp = await SharedPreferences.getInstance();
@@ -360,7 +209,6 @@ class StorageService {
       return defaultValue;
     }
   }
-
 
   Future<void> saveString(String key, String val) async {
     try {
@@ -384,46 +232,17 @@ class StorageService {
   Future<void> saveSocksPort(int val) => saveInt(_socksPortKey, val);
   Future<int> loadSocksPort() => loadInt(_socksPortKey, defaultValue: 10999);
 
-  // Settings: Startup, Auto-connect, Themes
+  // Boot, theme, and localization setting keys
   static const _startOnBootKey = "v2raypro_start_on_boot";
   static const _autoConnectKey = "v2raypro_auto_connect";
   static const _autoSysProxyKey = "v2raypro_auto_sys_proxy";
   static const _autoTunKey = "v2raypro_auto_tun";
   static const _themeModeKey = "v2raypro_theme_mode";
 
-  Future<void> setWindowsStartup(bool enable) async {
-    if (!Platform.isWindows) return;
-    try {
-      if (enable) {
-        final exe = Platform.resolvedExecutable;
-        Process.runSync("reg", [
-          "add",
-          r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-          "/v",
-          "V2RayPro",
-          "/t",
-          "REG_SZ",
-          "/d",
-          "\"$exe\"",
-          "/f",
-        ]);
-      } else {
-        Process.runSync("reg", [
-          "delete",
-          r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-          "/v",
-          "V2RayPro",
-          "/f",
-        ]);
-      }
-    } catch (_) {}
-  }
+  /// Windows startup setting method (no-op on Android).
+  Future<void> setWindowsStartup(bool enable) async {}
 
-  Future<void> saveStartOnBoot(bool val) async {
-    await saveBool(_startOnBootKey, val);
-    await setWindowsStartup(val);
-  }
-
+  Future<void> saveStartOnBoot(bool val) => saveBool(_startOnBootKey, val);
   Future<bool> loadStartOnBoot() => loadBool(_startOnBootKey, defaultValue: false);
 
   Future<void> saveAutoConnect(bool val) => saveBool(_autoConnectKey, val);
@@ -438,6 +257,7 @@ class StorageService {
   static const _enableUdpKey = "v2raypro_enable_udp";
   Future<void> saveEnableUdp(bool val) => saveBool(_enableUdpKey, val);
   Future<bool> loadEnableUdp() => loadBool(_enableUdpKey, defaultValue: true);
+
   Future<void> saveThemeMode(String mode) => saveString(_themeModeKey, mode);
   Future<String> loadThemeMode() => loadString(_themeModeKey, defaultValue: "system");
 
@@ -460,14 +280,7 @@ class StorageService {
     }
   }
 
-  static const _activeSessionNodeIdKey = "v2raypro_active_session_node_id";
-  static const _activeSessionConnectedAtKey = "v2raypro_active_session_connected_at";
-  static const _activeSessionIpKey = "v2raypro_active_session_ip";
-  static const _activeSessionCountryKey = "v2raypro_active_session_country";
-  static const _activeSessionCountryCodeKey = "v2raypro_active_session_country_code";
-  static const _activeSessionUplinkKey = "v2raypro_active_session_uplink";
-  static const _activeSessionDownlinkKey = "v2raypro_active_session_downlink";
-
+  /// Forwards active session methods to the specialized SessionStorage module.
   Future<void> saveActiveSession({
     required String nodeId,
     required DateTime connectedAt,
@@ -476,67 +289,23 @@ class StorageService {
     String? countryCode,
     int? uplinkBytes,
     int? downlinkBytes,
-  }) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_activeSessionNodeIdKey, nodeId);
-      await prefs.setInt(_activeSessionConnectedAtKey, connectedAt.millisecondsSinceEpoch);
-      if (exitIp != null) await prefs.setString(_activeSessionIpKey, exitIp);
-      if (country != null) await prefs.setString(_activeSessionCountryKey, country);
-      if (countryCode != null) await prefs.setString(_activeSessionCountryCodeKey, countryCode);
-      if (uplinkBytes != null) await prefs.setInt(_activeSessionUplinkKey, uplinkBytes);
-      if (downlinkBytes != null) await prefs.setInt(_activeSessionDownlinkKey, downlinkBytes);
-    } catch (_) {}
-  }
+  }) => SessionStorage.instance.saveActiveSession(
+    nodeId: nodeId,
+    connectedAt: connectedAt,
+    exitIp: exitIp,
+    country: country,
+    countryCode: countryCode,
+    uplinkBytes: uplinkBytes,
+    downlinkBytes: downlinkBytes,
+  );
 
-  Future<void> updateActiveSessionTraffic(int uplinkBytes, int downlinkBytes) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_activeSessionUplinkKey, uplinkBytes);
-      await prefs.setInt(_activeSessionDownlinkKey, downlinkBytes);
-    } catch (_) {}
-  }
+  Future<void> updateActiveSessionTraffic(int uplinkBytes, int downlinkBytes) =>
+      SessionStorage.instance.updateActiveSessionTraffic(uplinkBytes, downlinkBytes);
 
-  Future<void> updateActiveSessionOutbound({String? exitIp, String? country, String? countryCode}) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (exitIp != null) await prefs.setString(_activeSessionIpKey, exitIp);
-      if (country != null) await prefs.setString(_activeSessionCountryKey, country);
-      if (countryCode != null) await prefs.setString(_activeSessionCountryCodeKey, countryCode);
-    } catch (_) {}
-  }
+  Future<void> updateActiveSessionOutbound({String? exitIp, String? country, String? countryCode}) =>
+      SessionStorage.instance.updateActiveSessionOutbound(exitIp: exitIp, country: country, countryCode: countryCode);
 
-  Future<Map<String, dynamic>?> loadActiveSession() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final nodeId = prefs.getString(_activeSessionNodeIdKey);
-      final connectedAtMs = prefs.getInt(_activeSessionConnectedAtKey);
-      if (nodeId == null || connectedAtMs == null) return null;
+  Future<Map<String, dynamic>?> loadActiveSession() => SessionStorage.instance.loadActiveSession();
 
-      return {
-        'nodeId': nodeId,
-        'connectedAt': DateTime.fromMillisecondsSinceEpoch(connectedAtMs),
-        'exitIp': prefs.getString(_activeSessionIpKey),
-        'country': prefs.getString(_activeSessionCountryKey),
-        'countryCode': prefs.getString(_activeSessionCountryCodeKey),
-        'uplinkBytes': prefs.getInt(_activeSessionUplinkKey) ?? 0,
-        'downlinkBytes': prefs.getInt(_activeSessionDownlinkKey) ?? 0,
-      };
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> clearActiveSession() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_activeSessionNodeIdKey);
-      await prefs.remove(_activeSessionConnectedAtKey);
-      await prefs.remove(_activeSessionIpKey);
-      await prefs.remove(_activeSessionCountryKey);
-      await prefs.remove(_activeSessionCountryCodeKey);
-      await prefs.remove(_activeSessionUplinkKey);
-      await prefs.remove(_activeSessionDownlinkKey);
-    } catch (_) {}
-  }
+  Future<void> clearActiveSession() => SessionStorage.instance.clearActiveSession();
 }

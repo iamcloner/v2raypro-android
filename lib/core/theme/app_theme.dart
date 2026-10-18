@@ -1,4 +1,7 @@
-﻿import "package:flutter/material.dart";
+// File: lib/core/theme/app_theme.dart
+// Description: Global theme definitions and styling configurations for dark and light modes.
+
+import "package:flutter/material.dart";
 
 class AppTheme {
   static const primaryAccent = Color(0xFF6366F1); // Modern Indigo

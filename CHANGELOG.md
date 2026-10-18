@@ -1,4 +1,11 @@
-﻿# Changelog
+# Changelog
+
+## [1.3.2] - 2026-10-18
+
+- **WebSocket & ECH Connectivity**: Fixed WebSocket stream settings, enforced HTTP/1.1 ALPN, and removed invalid early data injections.
+- **Accurate Real-Delay Calibration**: Prioritized Cloudflare generate_204 with 1-RTT warm keep-alive testing matching v2rayN and v2rayNG standards.
+- **VPN IPv4 Routing Fix**: Reverted dual-stack IPv6 blackholing to ensure reliable internet connectivity across all network types.
+- **Domestic Bridge Exit Resolution**: Correctly resolves real exit countries for domestic reverse-proxy and clean IP nodes.
 
 ## [1.2.2] - 2026-10-17
 

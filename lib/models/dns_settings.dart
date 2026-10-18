@@ -1,3 +1,6 @@
+// File: lib/models/dns_settings.dart
+// Description: DNS presets and configuration settings models for Android proxy cores.
+
 class DnsPreset {
   final String id;
   final String name;

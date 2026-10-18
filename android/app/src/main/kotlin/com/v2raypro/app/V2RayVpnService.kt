@@ -266,7 +266,7 @@ class V2RayVpnService : VpnService() {
                 socksPort == currentSocksPort &&
                 appRoutingMode == currentRoutingMode &&
                 appRoutingList == currentRoutingList &&
-                (if (isTun) vpnInterface != null else true)
+                (if (isTun) (vpnInterface != null && vpnInterface?.fileDescriptor?.valid() == true) else true)
 
         if (canSeamlessSwitch) {
             val notification = createNotification(configName, notificationTitle, disconnectText)
@@ -274,8 +274,12 @@ class V2RayVpnService : VpnService() {
             nm.notify(NOTIFICATION_ID, notification)
 
             if (xrayBinary.isNotEmpty() && configPath.isNotEmpty()) {
-                // 1. Stop old Xray core
+                // 1. Stop old Xray core and allow port release
                 stopXray()
+                try {
+                    Thread.sleep(100)
+                } catch (_: Exception) {}
+
                 // 2. Stop old tunnel worker to clean up previous SOCKS sessions
                 if (isTun && vpnInterface != null) {
                     try {

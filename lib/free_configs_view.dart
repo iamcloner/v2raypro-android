@@ -1,7 +1,10 @@
+// File: lib/free_configs_view.dart
+// Description: Display, filter, and management screen for public free servers in Android.
+// Provides free subscription scanning, real delay testing, country filtering,
+// and direct connection to the optimal configuration.
+
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/l10n/translations.dart';
 import 'core/theme/app_theme.dart';
@@ -9,10 +12,15 @@ import 'models/proxy_node.dart';
 import 'providers/app_providers.dart';
 import 'services/country_service.dart';
 import 'services/real_delay_service.dart';
-import 'utils/ip_mask_util.dart';
-import 'widgets/country_flag_badge.dart';
 import 'widgets/country_filter_bar.dart';
+import 'widgets/free_configs/free_config_card.dart';
+import 'widgets/free_configs/free_configs_progress_banner.dart';
+import 'widgets/free_configs/free_configs_stats.dart';
 
+/// Free configurations screen widget in v2raypro Android.
+///
+/// Manages fetching, listing, latency testing, country filtering,
+/// and automated scanning state for free public configurations.
 class FreeConfigsView extends ConsumerStatefulWidget {
   final VoidCallback? onOpenDrawer;
   const FreeConfigsView({super.key, this.onOpenDrawer});
@@ -45,6 +53,7 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
     super.dispose();
   }
 
+  /// Connects or disconnects the selected node while synchronizing provider state.
   Future<void> _handleConnect(ProxyNode node) async {
     final connState = ref.read(connectionStatusProvider);
     final nodes = ref.read(nodesProvider);
@@ -58,6 +67,7 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
     }
   }
 
+  /// Tests real delay for a specific node in the background.
   Future<void> _testFreeNodeLatency(ProxyNode node) async {
     if (_testingNodeIds.contains(node.id)) return;
     setState(() => _testingNodeIds.add(node.id));
@@ -104,7 +114,6 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
 
     final nodesToFilter = freeState.allNodes.isNotEmpty ? freeState.allNodes : freeState.workingNodes;
     final filteredNodes = nodesToFilter.where((n) {
-      // 1. Country & Timeouts filter
       if (_selectedCountryCode != null) {
         if (_selectedCountryCode == '__timeouts__') {
           if (!n.hasTimedOut) return false;
@@ -115,7 +124,6 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
         }
       }
 
-      // 2. Text search filter
       if (_searchFilter.isNotEmpty) {
         final name = n.name.toLowerCase();
         final addr = n.address.toLowerCase();
@@ -128,272 +136,113 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
     }).toList();
 
     return Scaffold(
-      appBar: Platform.isAndroid
-          ? AppBar(
-              leading: IconButton(
-                icon: const Icon(Icons.menu_rounded),
-                tooltip: AppStrings.get('more', locale: locale),
-                onPressed: widget.onOpenDrawer,
-              ),
-              titleSpacing: 0,
-              title: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(7),
-                      border: Border.all(
-                        color: const Color(0xFF00D2FF).withValues(alpha: 0.4),
-                        width: 1.2,
-                      ),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Image.asset('assets/app_icon.png', fit: BoxFit.cover),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    AppStrings.get('free_configs', locale: locale),
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                ],
-              ),
-              actions: [
-                IconButton(
-                  icon: Icon(_isSearchExpanded ? Icons.close : Icons.search, size: 20),
-                  tooltip: AppStrings.get('search_nodes', locale: locale),
-                  onPressed: () {
-                    setState(() {
-                      _isSearchExpanded = !_isSearchExpanded;
-                      if (!_isSearchExpanded) {
-                        _searchController.clear();
-                      }
-                    });
-                  },
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.menu_rounded),
+          tooltip: AppStrings.get('more', locale: locale),
+          onPressed: widget.onOpenDrawer,
+        ),
+        titleSpacing: 0,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(7),
+                border: Border.all(
+                  color: const Color(0xFF00D2FF).withValues(alpha: 0.4),
+                  width: 1.2,
                 ),
-                if (freeState.isScanning)
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    icon: const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber),
-                    ),
-                    tooltip: AppStrings.get('cancel_scan', locale: locale),
-                    onPressed: () => ref.read(freeConfigsProvider.notifier).cancelScan(),
-                  )
-                else ...[
-                  if (freeState.workingNodes.isNotEmpty || freeState.timeoutNodes.isNotEmpty)
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.speed_rounded, color: Colors.cyanAccent),
-                      tooltip: AppStrings.get('test_all', locale: locale),
-                      onPressed: () => ref.read(freeConfigsProvider.notifier).testAllFreeNodes(),
-                    ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.autorenew_rounded, color: AppTheme.primaryAccent),
-                    tooltip: AppStrings.get('get_new_configs', locale: locale),
-                    onPressed: () {
-                      setState(() => _selectedCountryCode = null);
-                      ref.read(freeConfigsProvider.notifier).startScan();
-                    },
-                  ),
-                ],
-                const SizedBox(width: 4),
-              ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Image.asset('assets/app_icon.png', fit: BoxFit.cover),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              AppStrings.get('free_configs', locale: locale),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: Icon(_isSearchExpanded ? Icons.close : Icons.search, size: 20),
+            tooltip: AppStrings.get('search_nodes', locale: locale),
+            onPressed: () {
+              setState(() {
+                _isSearchExpanded = !_isSearchExpanded;
+                if (!_isSearchExpanded) {
+                  _searchController.clear();
+                }
+              });
+            },
+          ),
+          if (freeState.isScanning)
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              icon: const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber),
+              ),
+              tooltip: AppStrings.get('cancel_scan', locale: locale),
+              onPressed: () => ref.read(freeConfigsProvider.notifier).cancelScan(),
             )
-          : null,
+          else ...[
+            if (freeState.workingNodes.isNotEmpty || freeState.timeoutNodes.isNotEmpty)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.speed_rounded, color: Colors.cyanAccent),
+                tooltip: AppStrings.get('test_all', locale: locale),
+                onPressed: () => ref.read(freeConfigsProvider.notifier).testAllFreeNodes(),
+              ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.autorenew_rounded, color: AppTheme.primaryAccent),
+              tooltip: AppStrings.get('get_new_configs', locale: locale),
+              onPressed: () {
+                setState(() => _selectedCountryCode = null);
+                ref.read(freeConfigsProvider.notifier).startScan();
+              },
+            ),
+          ],
+          const SizedBox(width: 4),
+        ],
+      ),
       body: Padding(
-        padding: EdgeInsets.all(Platform.isAndroid ? 12 : 24),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (Platform.isAndroid) ...[
-              if (_isSearchExpanded) ...[
-                SizedBox(
-                  height: 38,
-                  child: TextField(
-                    controller: _searchController,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      hintText: AppStrings.get('search_nodes', locale: locale),
-                      prefixIcon: const Icon(Icons.search, size: 16),
-                      suffixIcon: _searchFilter.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear, size: 14),
-                              onPressed: () => _searchController.clear(),
-                            )
-                          : null,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                    ),
+            if (_isSearchExpanded) ...[
+              SizedBox(
+                height: 38,
+                child: TextField(
+                  controller: _searchController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    hintText: AppStrings.get('search_nodes', locale: locale),
+                    prefixIcon: const Icon(Icons.search, size: 16),
+                    suffixIcon: _searchFilter.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 14),
+                            onPressed: () => _searchController.clear(),
+                          )
+                        : null,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
                   ),
                 ),
-                const SizedBox(height: 8),
-              ],
-            ] else
-              // Top Bar for Desktop
-              LayoutBuilder(
-                builder: (context, constraints) {
-
-                final isNarrow = constraints.maxWidth < 600;
-                final titleCol = Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.card_giftcard_rounded, color: AppTheme.primaryAccent, size: 24),
-                        const SizedBox(width: 8),
-                        Text(
-                          AppStrings.get('free_configs', locale: locale),
-                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      AppStrings.get('free_configs_desc', locale: locale),
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
-                    ),
-                  ],
-                );
-
-                final actionBtn = freeState.isScanning
-                    ? OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.amber, width: 1.5),
-                        ),
-                        icon: const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber),
-                        ),
-                        label: Text(
-                          AppStrings.get('cancel_scan', locale: locale),
-                          style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold),
-                        ),
-                        onPressed: () => ref.read(freeConfigsProvider.notifier).cancelScan(),
-                      )
-                    : FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppTheme.primaryAccent,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        ),
-                        icon: const Icon(Icons.autorenew_rounded, size: 18),
-                        label: Text(
-                          AppStrings.get('get_new_configs', locale: locale),
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        onPressed: () {
-                          setState(() => _selectedCountryCode = null);
-                          ref.read(freeConfigsProvider.notifier).startScan();
-                        },
-                      );
-
-                if (isNarrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      titleCol,
-                      const SizedBox(height: 12),
-                      Align(alignment: Alignment.centerLeft, child: actionBtn),
-                    ],
-                  );
-                }
-
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    titleCol,
-                    actionBtn,
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-
-            // Metrics / Stats Dashboard Cards
-            _buildStatsDashboard(freeState, locale),
-            const SizedBox(height: 16),
-
-            // Scanning progress banner (if active)
-            if (freeState.isScanning) ...[
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).cardColor,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.amber),
-                            ),
-                            const SizedBox(width: 10),
-                            Flexible(
-                              child: Text(
-                                Platform.isAndroid
-                                    ? (freeState.status == 'fetching'
-                                        ? (locale == 'fa' ? 'درحال دریافت...' : 'Fetching...')
-                                        : (locale == 'fa' ? 'درحال تست...' : 'Testing...'))
-                                    : (freeState.status == 'fetching'
-                                        ? AppStrings.get('scanning_free_subs', locale: locale)
-                                        : AppStrings.get('testing_real_delay_batch', locale: locale)),
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              '${freeState.testedCandidates} / ${freeState.totalUnique} (${(freeState.progress * 100).toInt()}%)',
-                              style: const TextStyle(
-                                color: Colors.amber,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                              ),
-                            ),
-                            if (freeState.estimatedRemainingTime != null)
-                              Text(
-                                '${AppStrings.get('estimated_remaining_time', locale: locale)}: ${freeState.estimatedRemainingTime}',
-                                style: TextStyle(
-                                  color: Colors.amber.shade200,
-                                  fontSize: 11,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: freeState.progress > 0 ? freeState.progress : null,
-                        minHeight: 6,
-                        backgroundColor: Colors.white10,
-                        color: Colors.amber,
-                      ),
-                    ),
-                  ],
-                ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
             ],
-
-            // Country Filter Bar (based on real tested countries and timeouts)
+            FreeConfigsStats(state: freeState, locale: locale),
+            const SizedBox(height: 12),
+            if (freeState.isScanning) ...[
+              FreeConfigsProgressBanner(state: freeState, locale: locale),
+              const SizedBox(height: 12),
+            ],
             if (nodesToFilter.isNotEmpty)
               CountryFilterBar(
                 nodes: nodesToFilter,
@@ -401,55 +250,13 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
                 onCountrySelected: (code) => setState(() => _selectedCountryCode = code),
                 locale: locale,
               ),
-
-            // Search filter if nodes present (Desktop/Windows only; Android uses search icon in top bar)
-            if (!Platform.isAndroid && nodesToFilter.isNotEmpty) ...[
-              SizedBox(
-                height: 42,
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    hintText: AppStrings.get('search_nodes', locale: locale),
-                    prefixIcon: const Icon(Icons.search, size: 18),
-                    suffixIcon: _searchFilter.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear, size: 16),
-                            onPressed: () => _searchController.clear(),
-                          )
-                        : null,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-            ],
-
-            // Content List
+            const SizedBox(height: 8),
             Expanded(
               child: nodesToFilter.isEmpty && !freeState.isScanning
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.wifi_off_rounded, size: 64, color: Colors.grey.shade700),
-                          const SizedBox(height: 16),
-                          Text(
-                            AppStrings.get('no_free_configs_yet', locale: locale),
-                            style: const TextStyle(color: Colors.grey, fontSize: 14),
-                          ),
-                          const SizedBox(height: 16),
-                          FilledButton.icon(
-                            style: FilledButton.styleFrom(backgroundColor: AppTheme.primaryAccent),
-                            icon: const Icon(Icons.autorenew_rounded, size: 18),
-                            label: Text(AppStrings.get('get_new_configs', locale: locale)),
-                            onPressed: () => ref.read(freeConfigsProvider.notifier).startScan(),
-                          ),
-                        ],
-                      ),
-                    )
+                  ? _buildEmptyState(locale)
                   : ListView.separated(
                       itemCount: filteredNodes.length,
-                      separatorBuilder: (c, i) => const SizedBox(height: 10),
+                      separatorBuilder: (c, i) => const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final node = filteredNodes[index];
                         final isThisNodeActive = activeNode?.id == node.id ||
@@ -471,187 +278,20 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
                         final cdn = cdnMap[node.address.trim().toLowerCase()] ??
                             ref.read(nodeCdnMapProvider.notifier).detectCdn(node.address);
 
-                        return Card(
-                          margin: Platform.isAndroid ? EdgeInsets.zero : const EdgeInsets.symmetric(vertical: 4),
-                          elevation: Platform.isAndroid ? (isThisNodeActive ? 2 : 0) : null,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(Platform.isAndroid ? 12 : 10),
-                            side: Platform.isAndroid
-                                ? (isThisNodeActive
-                                    ? const BorderSide(color: AppTheme.primaryAccent, width: 2.0)
-                                    : BorderSide(color: Colors.white.withValues(alpha: 0.08), width: 1.0))
-                                : BorderSide(
-                                    color: isThisNodeConnected
-                                        ? AppTheme.primaryAccent
-                                        : (isThisNodeActive ? Colors.cyanAccent.withValues(alpha: 0.5) : Colors.transparent),
-                                    width: isThisNodeConnected ? 1.5 : 1,
-                                  ),
-                          ),
-                          color: Platform.isAndroid
-                              ? (isThisNodeActive
-                                  ? AppTheme.primaryAccent.withValues(alpha: 0.08)
-                                  : Theme.of(context).cardColor)
-                              : null,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(Platform.isAndroid ? 12 : 10),
-                            onTap: () => _handleConnect(node),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                              child: Row(
-                                children: [
-                                  // Active Indicator (Desktop only)
-                                  if (!Platform.isAndroid) ...[
-                                    Icon(
-                                      isThisNodeConnected
-                                          ? Icons.radio_button_checked
-                                          : (isThisNodeActive ? Icons.radio_button_checked : Icons.radio_button_off),
-                                      color: isThisNodeConnected ? AppTheme.primaryAccent : Colors.grey,
-                                      size: 22,
-                                    ),
-                                    const SizedBox(width: 12),
-                                  ],
-
-                                  // Country Flag / Unknown Pill Badge
-                                  CountryPillBadge(
-                                    countryCode: displayCountryCode,
-                                    country: displayCountry,
-                                    showUnknown: true,
-                                  ),
-                                  const SizedBox(width: 10),
-
-                                  // Node Details
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Flexible(
-                                              child: Text(
-                                                node.name,
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 13,
-                                                  color: isThisNodeConnected ? AppTheme.primaryAccent : null,
-                                                ),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                            if (cdn != null) ...[
-                                              const SizedBox(width: 6),
-                                              CdnBadge(cdn: cdn),
-                                            ],
-                                          ],
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          '${IpMaskUtil.mask(node.address, showFull: showFullIp)}:${node.port}  •  ${node.protocol.name.toUpperCase()}  •  ${node.network.name.toUpperCase()}',
-                                          style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-
-                                  // Real Delay Latency Badge & Probe Trigger
-                                  if (_testingNodeIds.contains(node.id))
-                                    const Padding(
-                                      padding: EdgeInsets.symmetric(horizontal: 6),
-                                      child: SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent),
-                                      ),
-                                    )
-                                  else ...[
-                                    if (node.hasValidPing)
-                                      InkWell(
-                                        onTap: () => _testFreeNodeLatency(node),
-                                        borderRadius: BorderRadius.circular(6),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                                          decoration: BoxDecoration(
-                                            color: AppTheme.successColor.withValues(alpha: 0.15),
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: AppTheme.successColor.withValues(alpha: 0.3), width: 0.8),
-                                          ),
-                                          child: Text(
-                                            '${node.latencyMs} ms',
-                                            style: const TextStyle(
-                                              color: AppTheme.successColor,
-                                              fontSize: 11.5,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      )
-                                    else if (node.hasTimedOut)
-                                      InkWell(
-                                        onTap: () => _testFreeNodeLatency(node),
-                                        borderRadius: BorderRadius.circular(6),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                          decoration: BoxDecoration(
-                                            color: AppTheme.errorColor.withValues(alpha: 0.15),
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: AppTheme.errorColor.withValues(alpha: 0.4), width: 0.8),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              const Icon(Icons.cloud_off_rounded, size: 11, color: AppTheme.errorColor),
-                                              const SizedBox(width: 3),
-                                              Text(
-                                                AppStrings.get('timeout', locale: locale),
-                                                style: const TextStyle(
-                                                  color: AppTheme.errorColor,
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    IconButton(
-                                      visualDensity: VisualDensity.compact,
-                                      icon: const Icon(Icons.bolt_rounded, size: 18, color: Colors.cyanAccent),
-                                      tooltip: AppStrings.get('retest_ping', locale: locale),
-                                      onPressed: () => _testFreeNodeLatency(node),
-                                    ),
-                                  ],
-                                  const SizedBox(width: 6),
-
-                                  // Connect Action Button
-                                  if (isThisNodeConnecting)
-                                    const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  else
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: isThisNodeConnected ? Colors.redAccent.shade700 : AppTheme.primaryAccent,
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                        visualDensity: VisualDensity.compact,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                      ),
-                                      onPressed: () => _handleConnect(node),
-                                      child: Text(
-                                        isThisNodeConnected
-                                            ? AppStrings.get('disconnect', locale: locale)
-                                            : AppStrings.get('connect', locale: locale),
-                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
+                        return FreeConfigCard(
+                          node: node,
+                          isThisNodeActive: isThisNodeActive,
+                          isThisNodeConnected: isThisNodeConnected,
+                          isThisNodeConnecting: isThisNodeConnecting,
+                          isTesting: _testingNodeIds.contains(node.id),
+                          showFullIp: showFullIp,
+                          displayCountryCode: displayCountryCode,
+                          displayCountry: displayCountry,
+                          cdn: cdn,
+                          locale: locale,
+                          onTap: () => _handleConnect(node),
+                          onRetest: () => _testFreeNodeLatency(node),
+                          onConnect: () => _handleConnect(node),
                         );
                       },
                     ),
@@ -662,129 +302,27 @@ class _FreeConfigsViewState extends ConsumerState<FreeConfigsView> {
     );
   }
 
-  Widget _buildStatsDashboard(FreeConfigsState state, String locale) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final card1 = _buildStatCard(
-          icon: Icons.cloud_download_rounded,
-          iconColor: Colors.blueAccent,
-          label: AppStrings.get('total_candidates', locale: locale),
-          value: state.totalScraped > 0 ? '${state.totalScraped}' : (state.workingNodes.isNotEmpty ? '${state.workingNodes.length}' : '0'),
-        );
-        final card2 = _buildStatCard(
-          icon: Icons.filter_alt_rounded,
-          iconColor: Colors.purpleAccent,
-          label: AppStrings.get('unique_candidates', locale: locale),
-          value: state.totalUnique > 0 ? '${state.totalUnique}' : (state.workingNodes.isNotEmpty ? '${state.workingNodes.length}' : '0'),
-        );
-        final card3 = _buildStatCard(
-          icon: Icons.speed_rounded,
-          iconColor: Colors.amber,
-          label: AppStrings.get('tested_count', locale: locale),
-          value: state.testedCandidates > 0 ? '${state.testedCandidates}' : (state.workingNodes.isNotEmpty ? '${state.workingNodes.length}' : '0'),
-        );
-        final card4 = _buildStatCard(
-          icon: Icons.check_circle_rounded,
-          iconColor: AppTheme.successColor,
-          label: AppStrings.get('responsive_configs_count', locale: locale),
-          value: '${state.workingNodes.length}',
-          highlightColor: AppTheme.successColor,
-        );
-        final card5 = _buildStatCard(
-          icon: Icons.cancel_rounded,
-          iconColor: Colors.redAccent,
-          label: AppStrings.get('failed_timeout_count', locale: locale),
-          value: '${state.failedCount}',
-          highlightColor: state.failedCount > 0 ? Colors.redAccent : null,
-        );
 
-        if (Platform.isAndroid || constraints.maxWidth < 700) {
-          final spacing = Platform.isAndroid ? 6.0 : 8.0;
-          return Column(
-            children: [
-              Row(children: [card1, SizedBox(width: spacing), card2]),
-              SizedBox(height: spacing),
-              Row(children: [card3, SizedBox(width: spacing), card4]),
-              SizedBox(height: spacing),
-              Row(children: [card5]),
-            ],
-          );
-        }
-
-        return Row(
-          children: [
-            card1,
-            const SizedBox(width: 10),
-            card2,
-            const SizedBox(width: 10),
-            card3,
-            const SizedBox(width: 10),
-            card4,
-            const SizedBox(width: 10),
-            card5,
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildStatCard({
-    required IconData icon,
-    required Color iconColor,
-    required String label,
-    required String value,
-    Color? highlightColor,
-  }) {
-    final isAndroid = Platform.isAndroid;
-    return Expanded(
-      child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: isAndroid ? 8 : 12,
-          vertical: isAndroid ? 6 : 10,
-        ),
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(isAndroid ? 8 : 10),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: EdgeInsets.all(isAndroid ? 5 : 7),
-              decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(isAndroid ? 6 : 8),
-              ),
-              child: Icon(icon, size: isAndroid ? 14 : 18, color: iconColor),
-            ),
-            SizedBox(width: isAndroid ? 6 : 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: isAndroid ? 9.5 : 10.5,
-                      color: Colors.grey.shade400,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  SizedBox(height: isAndroid ? 1 : 2),
-                  Text(
-                    value,
-                    style: TextStyle(
-                      fontSize: isAndroid ? 13 : 15,
-                      fontWeight: FontWeight.bold,
-                      color: highlightColor ?? Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+  /// Empty state widget displayed when no configurations are found.
+  Widget _buildEmptyState(String locale) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey.shade700),
+          const SizedBox(height: 14),
+          Text(
+            AppStrings.get('no_free_configs_yet', locale: locale),
+            style: const TextStyle(color: Colors.grey, fontSize: 13),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.primaryAccent),
+            icon: const Icon(Icons.autorenew_rounded, size: 16),
+            label: Text(AppStrings.get('get_new_configs', locale: locale)),
+            onPressed: () => ref.read(freeConfigsProvider.notifier).startScan(),
+          ),
+        ],
       ),
     );
   }

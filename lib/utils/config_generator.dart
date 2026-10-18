@@ -1,13 +1,21 @@
-import "dart:convert";
+// File: lib/utils/config_generator.dart
+// Description: Unified configuration generator for Xray and Sing-box proxy cores.
+// Generates runnable JSON config maps with inbounds, outbounds, DNS, and routing rules.
+
 import "dart:io";
 import "../models/proxy_node.dart";
 import "../models/routing_rule.dart";
+import "generators/singbox_config_generator.dart";
+import "generators/xray_stream_builder.dart";
 
-/// Unified generator for Xray and Sing-box configuration formats
+export "generators/singbox_config_generator.dart";
+export "generators/xray_stream_builder.dart";
+
+/// Unified configuration generator for Xray and Sing-box cores on Android.
 class ConfigGenerator {
   static const List<String> defaultDns = ["1.1.1.1", "8.8.8.8", "https://1.1.1.1/dns-query"];
 
-  /// Generates a complete, valid Xray JSON configuration Map
+  /// Generates a complete Xray configuration file as a structured JSON map.
   static Map<String, dynamic> generateXrayConfig(
     ProxyNode node, {
     int socksPort = 10808,
@@ -22,111 +30,7 @@ class ConfigGenerator {
     List<RoutingRule> routingRules = const [],
     AppRoutingMode appRoutingMode = AppRoutingMode.exclusive,
   }) {
-    String? nonEmpty(String? s) {
-      if (s == null) return null;
-      final t = s.trim();
-      return t.isNotEmpty ? t : null;
-    }
-
-    final effectiveSni = nonEmpty(node.sni) ?? nonEmpty(node.host) ?? node.address;
-    final effectiveHost = nonEmpty(node.host) ?? nonEmpty(node.sni) ?? node.address;
-    final rawPath = nonEmpty(node.path) ?? "/";
-    final safePath = rawPath.startsWith("/") ? rawPath : "/$rawPath";
-
-    final String netName;
-    if (node.network == NetworkType.splithttp || node.network == NetworkType.xhttp) {
-      netName = "xhttp";
-    } else if (node.network == NetworkType.httpUpgrade) {
-      netName = "httpupgrade";
-    } else {
-      netName = node.network.name;
-    }
-
-    final streamSettings = <String, dynamic>{
-      "network": netName,
-      "security": node.security.name,
-    };
-
-    if (node.security == SecurityType.tls) {
-      final tls = <String, dynamic>{
-        "serverName": effectiveSni,
-      };
-      if (node.fingerprint != null && node.fingerprint!.isNotEmpty) {
-        tls["fingerprint"] = node.fingerprint;
-      }
-      if (node.alpn != null && node.alpn!.isNotEmpty) {
-        tls["alpn"] = node.alpn;
-      } else if (node.network == NetworkType.ws || node.network == NetworkType.httpUpgrade) {
-        tls["alpn"] = ["http/1.1"];
-      }
-      if (node.echConfigList != null && node.echConfigList!.trim().isNotEmpty) {
-        tls["echConfigList"] = node.echConfigList!.trim();
-      }
-      if (node.verifyPeerCertByName != null && node.verifyPeerCertByName!.trim().isNotEmpty) {
-        tls["verifyPeerCertByName"] = node.verifyPeerCertByName!.trim();
-      }
-      if (node.certificatePinning != null && node.certificatePinning!.trim().isNotEmpty) {
-        tls["pinnedPeerCertificatePublicKeySha256"] = node.certificatePinning!.trim();
-        tls["pinnedPeerCertSha256"] = node.certificatePinning!.trim();
-      }
-      streamSettings["tlsSettings"] = tls;
-    } else if (node.security == SecurityType.reality) {
-      if (node.publicKey != null && node.publicKey!.trim().isNotEmpty) {
-        final reality = <String, dynamic>{
-          "serverName": effectiveSni,
-          "publicKey": node.publicKey!.trim(),
-          "shortId": node.shortId ?? "",
-          "spiderX": nonEmpty(node.spiderX) ?? "/",
-          "fingerprint": (node.fingerprint != null && node.fingerprint!.trim().isNotEmpty)
-              ? node.fingerprint!.trim()
-              : "chrome",
-        };
-        streamSettings["realitySettings"] = reality;
-      } else {
-        streamSettings["security"] = "none";
-      }
-    }
-
-    if (node.network == NetworkType.xhttp || node.network == NetworkType.splithttp) {
-      final xhttpMap = <String, dynamic>{
-        "path": safePath,
-        "host": effectiveHost,
-      };
-      if (node.mode != null && node.mode!.isNotEmpty) {
-        xhttpMap["mode"] = node.mode;
-      }
-      if (node.extra != null && node.extra!.isNotEmpty) {
-        try {
-          xhttpMap["extra"] = jsonDecode(node.extra!);
-        } catch (_) {
-          xhttpMap["extra"] = node.extra;
-        }
-      }
-      streamSettings["xhttpSettings"] = xhttpMap;
-    } else if (node.network == NetworkType.ws) {
-      streamSettings["wsSettings"] = {
-        "path": safePath,
-        "host": effectiveHost,
-        "headers": {"Host": effectiveHost},
-      };
-    } else if (node.network == NetworkType.grpc) {
-      streamSettings["grpcSettings"] = {
-        "serviceName": node.serviceName ?? "",
-        "multiMode": true,
-      };
-    } else if (node.network == NetworkType.h2) {
-      streamSettings["httpSettings"] = {
-        "path": safePath,
-        "host": [effectiveHost],
-      };
-    } else if (node.network == NetworkType.httpUpgrade) {
-      streamSettings["httpupgradeSettings"] = {
-        "path": safePath,
-        "host": effectiveHost,
-      };
-    }
-
-    streamSettings["sockopt"] = {"tcpNoDelay": true};
+    final streamSettings = XrayStreamBuilder.build(node);
 
     Map<String, dynamic> outbound;
     if (node.protocol == ProtocolType.vless) {
@@ -136,7 +40,6 @@ class ConfigGenerator {
         "level": 0,
         "packetEncoding": "xudp",
       };
-      // flow is only valid for tcp transport in VLESS
       if (node.flow != null &&
           node.flow!.trim().isNotEmpty &&
           node.network == NetworkType.tcp) {
@@ -350,81 +253,18 @@ class ConfigGenerator {
     };
   }
 
-  /// Generates a Sing-box JSON configuration Map
+  /// Generates configuration compatible with the Sing-box core.
   static Map<String, dynamic> generateSingboxConfig(
     ProxyNode node, {
     int socksPort = 10808,
     int httpPort = 10809,
     bool enableTun = false,
   }) {
-    String? nonEmpty(String? s) {
-      if (s == null) return null;
-      final t = s.trim();
-      return t.isNotEmpty ? t : null;
-    }
-
-    final effectiveSni = nonEmpty(node.sni) ?? nonEmpty(node.host) ?? node.address;
-    final effectiveHost = nonEmpty(node.host) ?? nonEmpty(node.sni) ?? node.address;
-    final rawPath = nonEmpty(node.path) ?? "/";
-    final safePath = rawPath.startsWith("/") ? rawPath : "/$rawPath";
-
-    final outbounds = <Map<String, dynamic>>[
-      {
-        "type": node.protocol.name,
-        "tag": "proxy",
-        "server": node.address,
-        "server_port": node.port,
-        "uuid": node.uuidOrPassword,
-        if (node.security == SecurityType.tls)
-          "tls": {
-            "enabled": true,
-            "server_name": effectiveSni,
-            if (node.alpn != null && node.alpn!.isNotEmpty) "alpn": node.alpn,
-          },
-        if (node.network == NetworkType.ws)
-          "transport": {
-            "type": "ws",
-            "path": safePath,
-            "headers": {
-              "Host": effectiveHost,
-            },
-          },
-      },
-      {"type": "direct", "tag": "direct"},
-      {"type": "block", "tag": "block"},
-      {"type": "dns", "tag": "dns-out"}
-    ];
-
-    final inbounds = <Map<String, dynamic>>[
-      {
-        "type": "mixed",
-        "tag": "mixed-in",
-        "listen": "127.0.0.1",
-        "listen_port": socksPort,
-      }
-    ];
-
-    if (enableTun) {
-      inbounds.add({
-        "type": "tun",
-        "tag": "tun-in",
-        "interface_name": "v2raypro-tun",
-        "inet4_address": "172.19.0.1/30",
-        "auto_route": true,
-        "strict_route": true
-      });
-    }
-
-    return {
-      "log": {"level": "warn"},
-      "inbounds": inbounds,
-      "outbounds": outbounds,
-      "route": {
-        "rules": [
-          {"protocol": "dns", "outbound": "dns-out"},
-          {"geoip": "private", "outbound": "direct"}
-        ]
-      }
-    };
+    return SingboxConfigGenerator.generate(
+      node,
+      socksPort: socksPort,
+      httpPort: httpPort,
+      enableTun: enableTun,
+    );
   }
 }
